@@ -10,8 +10,10 @@ public interface IAttendanceRepository
     Task<bool> ClockInAsync(int empId);
     Task<bool> ClockOutAsync(int attendanceId, DateTime clockOut, decimal totalHours, int earlyExitMinutes);
     Task<IEnumerable<Attendance>> GetAllAttendanceAsync();
+    Task<IEnumerable<Attendance>> GetAttendanceBySpaceIdAsync(int spaceId, int? limitRows = 500);
     Task<bool> StartBreakAsync(int empId);
     Task<bool> EndBreakAsync(int empId);
+    Task<DateTime?> GetActiveBreakStartAsync(int empId);
     Task<DateTime> GetDateOfJoiningAsync(int empId);
     Task<(TimeSpan? StartTime, TimeSpan? EndTime, int? WorkingHours)> GetSpaceWorkTimesAsync(int empId);
     Task TestClearTodayAsync(int empId);

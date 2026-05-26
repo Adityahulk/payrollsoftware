@@ -57,4 +57,25 @@ public class DashboardController : ControllerBase
             return StatusCode(500, new { message = "Failed to fetch recent employees." });
         }
     }
+
+    // New: single optimized call replacing 5+ frontend API calls
+    [HttpGet("admin-summary")]
+    public async Task<IActionResult> GetAdminSummary()
+    {
+        try
+        {
+            var claim = User.FindFirst("empId") ?? User.FindFirst("EmpId") ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+            if (claim == null)
+                return Unauthorized(new { message = "Unauthorized admin session." });
+
+            int adminId = int.Parse(claim.Value);
+            var summary = await _dashboardRepository.GetAdminSummaryAsync(adminId);
+            return Ok(summary);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DashboardController.GetAdminSummary] Error: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to fetch admin summary." });
+        }
+    }
 }

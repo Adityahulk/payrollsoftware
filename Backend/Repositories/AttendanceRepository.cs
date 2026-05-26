@@ -108,28 +108,99 @@ public class AttendanceRepository : IAttendanceRepository
     public async Task<IEnumerable<Attendance>> GetAllAttendanceAsync()
     {
         var query = @"SELECT attendanceid, empid, attendancedate::timestamp AS attendancedate, clockin, clockout, totalhours, status, lateminutes, earlyexitminutes, createdat 
-                      FROM t_attendance ORDER BY attendancedate DESC";
+                      FROM t_attendance ORDER BY attendancedate DESC LIMIT 5000";
         return await _dbConnection.QueryAsync<Attendance>(query);
+    }
+
+    // Optimized: fetches attendance filtered by space at the DB level (no C# post-filter)
+    public async Task<IEnumerable<Attendance>> GetAttendanceBySpaceIdAsync(int spaceId, int? limitRows = 500)
+    {
+        var query = @"
+            SELECT a.attendanceid, a.empid, a.attendancedate::timestamp AS attendancedate,
+                   a.clockin, a.clockout, a.totalhours, a.status,
+                   a.lateminutes, a.earlyexitminutes, a.createdat
+            FROM t_attendance a
+            JOIN t_users u ON a.empid = u.empid
+            WHERE u.spaceid = @SpaceId
+            ORDER BY a.attendancedate DESC
+            LIMIT @Limit;";
+        return await _dbConnection.QueryAsync<Attendance>(query, new { SpaceId = spaceId, Limit = limitRows ?? 500 });
     }
 
     public async Task<bool> StartBreakAsync(int empId)
     {
         var now = DateTime.Now;
-        var totalBreak = await _dbConnection.ExecuteScalarAsync<int>(
-            @"SELECT COALESCE(SUM(totalbreakminutes), 0)
+        var today = now.Date;
+
+        // STEP 1: check active break FIRST
+        var activeBreakStart = await _dbConnection.ExecuteScalarAsync<DateTime?>(
+            @"SELECT breakstart
               FROM employeebreaks
-              WHERE empid = @EmpId AND DATE(breakstart) = @Today",
-            new { EmpId = empId, Today = now.Date });
-
-        if (totalBreak >= 60) return false;
-
-        var active = await _dbConnection.ExecuteScalarAsync<int>(
-            @"SELECT COUNT(1) FROM employeebreaks
-              WHERE empid = @EmpId AND breakend IS NULL",
+              WHERE empid = @EmpId
+              AND breakend IS NULL
+              ORDER BY breakstart DESC
+              LIMIT 1",
             new { EmpId = empId });
 
-        if (active > 0) return false;
+        if (activeBreakStart.HasValue)
+            throw new InvalidOperationException("Break already active");
 
+        // STEP 2: cooldown check (ONLY if no active break)
+        var lastBreakEnd = await _dbConnection.ExecuteScalarAsync<DateTime?>(
+            @"SELECT MAX(breakend)
+              FROM employeebreaks
+              WHERE empid = @EmpId",
+            new { EmpId = empId });
+
+        if (lastBreakEnd.HasValue && (now - lastBreakEnd.Value).TotalMinutes < 5)
+        {
+            throw new InvalidOperationException("Wait before starting next break");
+        }
+
+        // 1. Get space config (number of breaks allowed, total break time allowed)
+        var spaceConfig = await _dbConnection.QueryFirstOrDefaultAsync<dynamic>(
+            @"SELECT s.numberofbreaks, s.breaktime
+              FROM t_spaces s
+              INNER JOIN t_users u ON u.spaceid = s.spaceid
+              WHERE u.empid = @EmpId",
+            new { EmpId = empId }) as IDictionary<string, object>;
+
+        int maxBreaks = 2; // Default fallback
+        int maxBreakMinutes = 60; // Default fallback
+
+        if (spaceConfig != null)
+        {
+            if (spaceConfig.TryGetValue("numberofbreaks", out var nb) && nb != null)
+                maxBreaks = Convert.ToInt32(nb);
+            if (spaceConfig.TryGetValue("breaktime", out var bt) && bt != null)
+                maxBreakMinutes = Convert.ToInt32(bt);
+        }
+
+        // 2. Count today's breaks
+        var breakCount = await _dbConnection.ExecuteScalarAsync<int>(
+            @"SELECT COUNT(*)
+              FROM employeebreaks
+              WHERE empid = @EmpId
+              AND breakstart >= @Today
+              AND breakstart < @Today + INTERVAL '1 day'",
+            new { EmpId = empId, Today = today });
+
+        if (breakCount >= maxBreaks)
+            throw new InvalidOperationException("Max number of breaks reached");
+
+        // 3. Check total break minutes
+        var totalMinutes = await _dbConnection.ExecuteScalarAsync<int>(
+            @"SELECT COALESCE(SUM(totalbreakminutes), 0)
+              FROM employeebreaks
+              WHERE empid = @EmpId
+              AND breakstart >= @Today
+              AND breakstart < @Today + INTERVAL '1 day'",
+            new { EmpId = empId, Today = today });
+
+        if (totalMinutes >= maxBreakMinutes)
+            throw new InvalidOperationException("Daily break limit reached");
+
+        // 5. Insert new break
         await _dbConnection.ExecuteAsync(
             @"INSERT INTO employeebreaks(empid, breakstart, createdat)
               VALUES (@EmpId, @Now, @Now)",
@@ -162,6 +233,16 @@ public class AttendanceRepository : IAttendanceRepository
             new { Now = now, Minutes = minutes, BreakId = breakData.breakid });
 
         return true;
+    }
+
+    public async Task<DateTime?> GetActiveBreakStartAsync(int empId)
+    {
+        var query = @"SELECT breakstart 
+                      FROM employeebreaks 
+                      WHERE empid = @EmpId 
+                      AND breakend IS NULL 
+                      ORDER BY breakstart DESC LIMIT 1";
+        return await _dbConnection.QueryFirstOrDefaultAsync<DateTime?>(query, new { EmpId = empId });
     }
 
     public async Task<DateTime> GetDateOfJoiningAsync(int empId)

@@ -169,10 +169,44 @@ public class AttendanceController : ControllerBase
     }
 
     [HttpGet]
+    [Authorize]
     public async Task<IActionResult> GetAllAttendance()
     {
-        var attendance = await _attendanceRepository.GetAllAttendanceAsync();
-        return Ok(attendance);
+        try
+        {
+            var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
+                       ?? User.FindFirst("role")?.Value;
+            var empIdClaim = User.FindFirst("EmpId")?.Value 
+                             ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            int.TryParse(empIdClaim, out int empId);
+
+            if (role == "Admin")
+            {
+                var attendance = await _attendanceRepository.GetAllAttendanceAsync();
+                return Ok(attendance);
+            }
+            else if (role == "Manager" || role == "TeamLead")
+            {
+                var spaceIdClaim = User.FindFirst("SpaceId")?.Value;
+                if (int.TryParse(spaceIdClaim, out int spaceId))
+                {
+                    // Optimized: DB-level space filter instead of fetching all and filtering in C#
+                    var filteredAttendance = await _attendanceRepository.GetAttendanceBySpaceIdAsync(spaceId, 500);
+                    return Ok(filteredAttendance);
+                }
+                return Forbid();
+            }
+            else
+            {
+                var attendance = await _attendanceRepository.GetAttendanceByUserIdAsync(empId);
+                return Ok(attendance);
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Console.WriteLine($"[AttendanceController.GetAllAttendance] Error: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to fetch attendance data" });
+        }
     }
 
     [HttpPost("break-start")]
@@ -186,12 +220,24 @@ public class AttendanceController : ControllerBase
         if (!int.TryParse(empIdClaim, out int empId))
             return BadRequest(new { message = "Invalid EmpId format" });
 
-        var result = await _attendanceRepository.StartBreakAsync(empId);
+        try
+        {
+            var result = await _attendanceRepository.StartBreakAsync(empId);
 
-        if (!result)
-            return BadRequest(new { message = "Break already started or 60-minute daily limit reached" });
+            if (!result)
+                return BadRequest(new { message = "Break already started or 60-minute daily limit reached" });
 
-        return Ok(new { message = "Break started successfully" });
+            return Ok(new { message = "Break started successfully" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (System.Exception ex)
+        {
+            Console.WriteLine($"[StartBreak Error] {ex.Message}");
+            return StatusCode(500, new { message = "Failed to start break due to an internal server error." });
+        }
     }
 
     [HttpPost("break-end")]
@@ -217,6 +263,37 @@ public class AttendanceController : ControllerBase
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("active-break")]
+    [Authorize]
+    public async Task<IActionResult> GetActiveBreak()
+    {
+        var empIdClaim = User.FindFirst("EmpId")?.Value;
+        if (string.IsNullOrEmpty(empIdClaim))
+            return Unauthorized(new { message = "Invalid token or missing EmpId" });
+
+        if (!int.TryParse(empIdClaim, out int empId))
+            return BadRequest(new { message = "Invalid EmpId format" });
+
+        try
+        {
+            var breakStart = await _attendanceRepository.GetActiveBreakStartAsync(empId);
+
+            if (breakStart.HasValue)
+            {
+                return Ok(new { isOnBreak = true, breakStart = breakStart.Value });
+            }
+            else
+            {
+                return Ok(new { isOnBreak = false });
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Console.WriteLine($"[GetActiveBreak Error] {ex.Message}");
+            return StatusCode(500, new { message = "Failed to fetch active break due to an internal server error." });
         }
     }
 

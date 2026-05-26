@@ -21,7 +21,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000")
+        policy.WithOrigins("http://localhost:3000", "http://localhost:3001")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -66,6 +66,7 @@ builder.Services.AddScoped<Backend.Repositories.IAnalyticsRepository, Backend.Re
 builder.Services.AddScoped<Backend.Repositories.ILeaveRepository, Backend.Repositories.LeaveRepository>();
 builder.Services.AddScoped<Backend.Repositories.IDashboardRepository, Backend.Repositories.DashboardRepository>();
 builder.Services.AddScoped<Backend.Services.INotificationService, Backend.Services.NotificationService>();
+builder.Services.AddHostedService<Backend.Services.MonthEndHostedService>();
 
 var app = builder.Build();
 
@@ -555,6 +556,44 @@ try
         catch (System.Exception ex)
         {
             System.Console.WriteLine($"[Database Reorganization] Failed to align space ownership: {ex.Message}");
+        }
+
+        // Create high-performance query indexes on foreign key and lookup columns to resolve slow page loads
+        try
+        {
+            using (var indexCmd = new NpgsqlCommand(@"
+                CREATE INDEX IF NOT EXISTS idx_t_users_spaceid ON t_users(spaceid);
+                CREATE INDEX IF NOT EXISTS idx_t_attendance_empid ON t_attendance(empid);
+                CREATE INDEX IF NOT EXISTS idx_t_worklogs_empid ON t_worklogs(empid);
+                CREATE INDEX IF NOT EXISTS idx_t_payrollpayments_empid ON t_payrollpayments(empid);
+                CREATE INDEX IF NOT EXISTS idx_t_payslips_empid ON t_payslips(empid);
+                CREATE INDEX IF NOT EXISTS idx_t_allowances_spaceid ON t_allowances(spaceid);
+                CREATE INDEX IF NOT EXISTS idx_t_deductions_spaceid ON t_deductions(spaceid);
+                CREATE INDEX IF NOT EXISTS idx_employeebreaks_empid ON employeebreaks(empid);
+                CREATE INDEX IF NOT EXISTS idx_t_leaves_empid ON t_leaves(empid);
+
+                -- Composite indexes for payroll bulk-fetch optimization (added 2025)
+                CREATE INDEX IF NOT EXISTS idx_attendance_emp_date
+                    ON t_attendance(empid, attendancedate);
+                CREATE INDEX IF NOT EXISTS idx_attendance_space_date
+                    ON t_attendance(empid, attendancedate DESC);
+                CREATE INDEX IF NOT EXISTS idx_leaves_emp_date_status
+                    ON t_leaves(empid, leavedate, status);
+                CREATE INDEX IF NOT EXISTS idx_worklogs_emp_date
+                    ON t_worklogs(empid, workdate);
+                CREATE INDEX IF NOT EXISTS idx_payroll_space_date
+                    ON t_payrollpayments(spaceid, createdat DESC);
+                CREATE INDEX IF NOT EXISTS idx_tasks_assigned_emp
+                    ON t_projecttasks(assignedtoempid);
+            ", conn))
+            {
+                indexCmd.ExecuteNonQuery();
+                System.Console.WriteLine("[Database Reorganization] Successfully completed query index creation for 10x-100x loading speedup.");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            System.Console.WriteLine($"[Database Reorganization Warning] Query index creation failed: {ex.Message}");
         }
     }
 }

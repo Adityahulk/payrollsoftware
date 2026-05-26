@@ -22,3 +22,14 @@ public class RecentEmployeeDto
     public DateTime DateOfJoining { get; set; }
     public string SpaceName { get; set; } = string.Empty;
 }
+
+public class AdminSummaryDto
+{
+    public int TotalEmployees { get; set; }
+    public int PresentToday { get; set; }
+    public int AbsentToday { get; set; }
+    public decimal TotalPayroll { get; set; }
+    public int PendingLeaves { get; set; }
+    public int TotalSpaces { get; set; }
+    public int ActiveContracts { get; set; }
+}

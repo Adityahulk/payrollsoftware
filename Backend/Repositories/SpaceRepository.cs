@@ -378,7 +378,7 @@ public class SpaceRepository : ISpaceRepository
 
     public async Task<IEnumerable<dynamic>> GetSpaceEmployeePayrollEvaluationsAsync(int spaceId, bool applyPenalties = true, int? month = null, int? year = null)
     {
-        Console.WriteLine("START PAYROLL");
+        Console.WriteLine("START PAYROLL (Optimized - No N+1)");
         Console.WriteLine("SpaceId: " + spaceId);
 
         int targetMonth = month ?? DateTime.UtcNow.Month;
@@ -393,7 +393,6 @@ public class SpaceRepository : ISpaceRepository
         }
 
         // Get working days for off-day aware calculations: safe JSON parsing
-        Console.WriteLine("Before WorkingDays Parse");
         var workingDaysList = new List<string>();
         if (space != null && !string.IsNullOrEmpty(space.WorkingDays))
         {
@@ -411,15 +410,16 @@ public class SpaceRepository : ISpaceRepository
             workingDaysList = new List<string> { "Mon", "Tue", "Wed", "Thu", "Fri" };
         }
 
-        // 2. Fetch active employees (excluding Admin)
+        // 2. Fetch active employees (excluding Admin) — ORDER BY empid DESC
         var employees = await _dbConnection.QueryAsync<dynamic>(
-            "SELECT empid, name, email, role, accountnumber, bankname, accountholdername, ifsccode, upiid FROM t_users WHERE spaceid = @SpaceId AND role != 'Admin' ORDER BY empid ASC;",
+            "SELECT empid, name, email, role, accountnumber, bankname, accountholdername, ifsccode, upiid FROM t_users WHERE spaceid = @SpaceId AND role != 'Admin' ORDER BY empid DESC;",
             new { SpaceId = spaceId });
         var employeesList = (employees ?? System.Linq.Enumerable.Empty<dynamic>()).ToList();
         Console.WriteLine("Employees Count: " + employeesList.Count);
 
+        if (employeesList.Count == 0) return new List<dynamic>();
+
         // 3. Fetch basic salaries
-        Console.WriteLine("Before Salary Fetch");
         var salaryRows = await _dbConnection.QueryAsync<dynamic>(
             "SELECT empid, basic FROM t_employeesalary WHERE spaceid = @SpaceId;",
             new { SpaceId = spaceId });
@@ -436,7 +436,6 @@ public class SpaceRepository : ISpaceRepository
         var deductions = await GetDeductionsBySpaceIdAsync(spaceId);
 
         // 6. Fetch attendance records (filtered by target month/year)
-        Console.WriteLine("Before Attendance Fetch");
         var attendanceRecords = await _dbConnection.QueryAsync<dynamic>(
             @"SELECT a.empid, a.status, a.lateminutes, a.earlyexitminutes, a.breakhours, a.attendancedate 
               FROM t_attendance a 
@@ -450,7 +449,6 @@ public class SpaceRepository : ISpaceRepository
             .ToDictionary(g => g.Key, g => g.ToList());
 
         // 7. Fetch tasks
-        Console.WriteLine("Before Task Fetch");
         var taskRecords = await _dbConnection.QueryAsync<dynamic>(
             @"SELECT t.assignedtoempid as empid, t.taskstatus 
               FROM t_projecttasks t 
@@ -475,6 +473,73 @@ public class SpaceRepository : ISpaceRepository
             paymentStatusDict[Convert.ToInt32(p.empid)] = p.status?.ToString() ?? "Pending";
         }
 
+        // ─── BULK PRE-FETCH: DOJ, Attendance Dates, Leave Dates (Eliminates N+1) ───
+        
+        // 9. Bulk-fetch DOJ for all employees in this space
+        var dojRows = await _dbConnection.QueryAsync<dynamic>(
+            @"SELECT empid, COALESCE(dateofjoining, CURRENT_DATE)::timestamp AS doj
+              FROM t_users
+              WHERE spaceid = @SpaceId AND role != 'Admin';",
+            new { SpaceId = spaceId });
+        var dojDict = new Dictionary<int, DateTime>();
+        foreach (var row in dojRows)
+        {
+            int eid = 0;
+            if (row.empid != null && int.TryParse(row.empid.ToString(), out eid) && eid > 0)
+            {
+                DateTime parsed = DateTime.MinValue;
+                if (row.doj != null && DateTime.TryParse(row.doj.ToString(), out parsed))
+                    dojDict[eid] = parsed;
+            }
+        }
+
+        // 10. Bulk-fetch presence dates for target month
+        var attDateRows = await _dbConnection.QueryAsync<dynamic>(
+            @"SELECT a.empid, DATE(a.attendancedate)::timestamp AS adate
+              FROM t_attendance a
+              JOIN t_users u ON a.empid = u.empid
+              WHERE u.spaceid = @SpaceId
+                AND EXTRACT(MONTH FROM a.attendancedate) = @Month
+                AND EXTRACT(YEAR FROM a.attendancedate) = @Year;",
+            new { SpaceId = spaceId, Month = targetMonth, Year = targetYear });
+        var attDatesDict = new Dictionary<int, HashSet<DateTime>>();
+        foreach (var row in attDateRows)
+        {
+            int eid = 0;
+            if (row.empid == null || !int.TryParse(row.empid.ToString(), out eid) || eid <= 0) continue;
+            DateTime parsed = DateTime.MinValue;
+            if (row.adate != null && DateTime.TryParse(row.adate.ToString(), out parsed))
+            {
+                if (!attDatesDict.ContainsKey(eid)) attDatesDict[eid] = new HashSet<DateTime>();
+                attDatesDict[eid].Add(parsed.Date);
+            }
+        }
+
+        // 11. Bulk-fetch approved leave dates for target month
+        var leaveDateRows = await _dbConnection.QueryAsync<dynamic>(
+            @"SELECT l.empid, l.leavedate::timestamp AS ldate
+              FROM t_leaves l
+              JOIN t_users u ON l.empid = u.empid
+              WHERE u.spaceid = @SpaceId
+                AND l.status = 'Approved'
+                AND EXTRACT(MONTH FROM l.leavedate) = @Month
+                AND EXTRACT(YEAR FROM l.leavedate) = @Year;",
+            new { SpaceId = spaceId, Month = targetMonth, Year = targetYear });
+        var leaveDatesDict = new Dictionary<int, HashSet<DateTime>>();
+        foreach (var row in leaveDateRows)
+        {
+            int eid = 0;
+            if (row.empid == null || !int.TryParse(row.empid.ToString(), out eid) || eid <= 0) continue;
+            DateTime parsed = DateTime.MinValue;
+            if (row.ldate != null && DateTime.TryParse(row.ldate.ToString(), out parsed))
+            {
+                if (!leaveDatesDict.ContainsKey(eid)) leaveDatesDict[eid] = new HashSet<DateTime>();
+                leaveDatesDict[eid].Add(parsed.Date);
+            }
+        }
+
+        Console.WriteLine($"[Payroll] Bulk data fetched. Employees: {employeesList.Count}, DOJs: {dojDict.Count}, AttDates: {attDatesDict.Count}, LeaveDates: {leaveDatesDict.Count}");
+
         var results = new List<dynamic>();
 
         foreach (var emp in employeesList)
@@ -490,24 +555,13 @@ public class SpaceRepository : ISpaceRepository
                 email = emp.email?.ToString() ?? "";
                 role = emp.role?.ToString() ?? "Employee";
 
-                // Basic Salary & Fallbacks (Part 5)
                 decimal basicSalary = 25000m;
                 bool salaryConfigured = salaryDict.TryGetValue(empId, out decimal customBasic);
-                if (salaryConfigured)
+                if (salaryConfigured && customBasic > 0)
                 {
                     basicSalary = customBasic;
                 }
-                else
-                {
-                    basicSalary = 25000m; // Fallback Basic
-                }
 
-                if (basicSalary <= 0)
-                {
-                    basicSalary = 25000m;
-                }
-
-                // Calculate allowances
                 var allowanceList = new List<dynamic>();
                 decimal totalAllowances = 0m;
                 foreach (var allowance in allowances)
@@ -524,7 +578,6 @@ public class SpaceRepository : ISpaceRepository
                     });
                 }
 
-                // Fallback Salary breakdown elements if salary is not in DB (Part 5)
                 if (!salaryConfigured && allowanceList.Count == 0)
                 {
                     allowanceList.Add(new { Name = "HRA", Type = "Fixed", Value = 10000m, Amount = 10000m });
@@ -532,26 +585,19 @@ public class SpaceRepository : ISpaceRepository
                     totalAllowances = 13000m;
                 }
 
-                // Get calibrated penalty rates
                 var calibratedRates = PenaltyCalibrator.GetCalibratedRates(basicSalary, deductions);
 
-                // Find penalty deductions if they exist in DB to get their custom name, type, and value
-                var absentDed = deductions.FirstOrDefault(d => d.DeductionType == "Absent" || d.Name.Contains("absent", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("absence", StringComparison.OrdinalIgnoreCase));
-                var lateDed = deductions.FirstOrDefault(d => d.DeductionType == "Late" || d.Name.Contains("late", StringComparison.OrdinalIgnoreCase));
-                var earlyExitDed = deductions.FirstOrDefault(d => d.DeductionType == "Early Exit" || d.Name.Contains("early", StringComparison.OrdinalIgnoreCase));
-                var breakDed = deductions.FirstOrDefault(d => d.DeductionType == "Excess Break" || d.Name.Contains("break", StringComparison.OrdinalIgnoreCase));
-                var taskDed = deductions.FirstOrDefault(d => d.DeductionType == "Pending Tasks" || d.Name.Contains("task", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("pending", StringComparison.OrdinalIgnoreCase));
+                var absentDed   = deductions.FirstOrDefault(d => d.DeductionType == "Absent"       || d.Name.Contains("absent",  StringComparison.OrdinalIgnoreCase) || d.Name.Contains("absence",  StringComparison.OrdinalIgnoreCase));
+                var lateDed     = deductions.FirstOrDefault(d => d.DeductionType == "Late"          || d.Name.Contains("late",    StringComparison.OrdinalIgnoreCase));
+                var earlyExitDed= deductions.FirstOrDefault(d => d.DeductionType == "Early Exit"    || d.Name.Contains("early",   StringComparison.OrdinalIgnoreCase));
+                var breakDed    = deductions.FirstOrDefault(d => d.DeductionType == "Excess Break"  || d.Name.Contains("break",   StringComparison.OrdinalIgnoreCase));
+                var taskDed     = deductions.FirstOrDefault(d => d.DeductionType == "Pending Tasks" || d.Name.Contains("task",    StringComparison.OrdinalIgnoreCase) || d.Name.Contains("pending", StringComparison.OrdinalIgnoreCase));
 
-                // Calculate standard deductions
                 var deductionList = new List<dynamic>();
                 decimal totalDeductions = 0m;
                 foreach (var deduction in deductions)
                 {
-                    // Skip if this deduction is classified as a performance penalty
-                    if (calibratedRates.PenaltyDeductionIds.Contains(deduction.DeductionId))
-                    {
-                        continue;
-                    }
+                    if (calibratedRates.PenaltyDeductionIds.Contains(deduction.DeductionId)) continue;
 
                     decimal amt = deduction.Type == "Percentage" 
                         ? Math.Round(basicSalary * deduction.Value / 100m, 2) 
@@ -566,203 +612,124 @@ public class SpaceRepository : ISpaceRepository
                     });
                 }
 
-                // Calculate performance occurrences
-                int lateCount = 0;
-                int earlyExitCount = 0;
-                int excessBreakCount = 0;
-
-                List<dynamic> atts = null;
-                if (attendanceGroup.TryGetValue(empId, out var foundAtts))
-                {
-                    atts = foundAtts;
-                }
-                atts ??= new List<dynamic>();
+                int lateCount = 0, earlyExitCount = 0, excessBreakCount = 0;
+                var atts = attendanceGroup.TryGetValue(empId, out var foundAtts) ? foundAtts : new List<dynamic>();
 
                 foreach (var att in atts)
                 {
-                    // Check if this attendance day is a working day (Part 3 - Safe Date Parse)
-                    DateTime attDate = DateTime.MinValue;
-                    if (att.attendancedate != null)
-                    {
-                        DateTime parsedAttDate;
-                        if (DateTime.TryParse(att.attendancedate.ToString(), out parsedAttDate))
-                        {
-                            attDate = parsedAttDate;
-                        }
-                        else
-                        {
-                            continue;
-                        }
-                    }
-                    else
-                    {
-                        continue;
-                    }
+                    if (att.attendancedate == null) continue;
+                    if (!DateTime.TryParse(att.attendancedate.ToString(), out DateTime attDate)) continue;
+
                     string attDayName = Models.Space.DayOfWeekToShortName(attDate.DayOfWeek);
-                    bool isWorkingDay = workingDaysList.Contains(attDayName, StringComparer.OrdinalIgnoreCase);
+                    if (!workingDaysList.Contains(attDayName, StringComparer.OrdinalIgnoreCase)) continue;
 
-                    // Only count penalties on working days (Part 4 - Safe Number Parsing)
-                    if (isWorkingDay)
-                    {
-                        int lateMinutes = 0;
-                        int.TryParse(att.lateminutes?.ToString(), out lateMinutes);
-                        if (lateMinutes > 5)
-                        {
-                            lateCount++;
-                        }
+                    int lateMinutes = 0;
+                    int.TryParse(att.lateminutes?.ToString(), out lateMinutes);
+                    if (lateMinutes > 5) lateCount++;
 
-                        int earlyExitMinutes = 0;
-                        int.TryParse(att.earlyexitminutes?.ToString(), out earlyExitMinutes);
-                        if (earlyExitMinutes > 0)
-                        {
-                            earlyExitCount++;
-                        }
+                    int earlyExitMinutes = 0;
+                    int.TryParse(att.earlyexitminutes?.ToString(), out earlyExitMinutes);
+                    if (earlyExitMinutes > 0) earlyExitCount++;
 
-                        decimal breakHours = 0m;
-                        decimal.TryParse(att.breakhours?.ToString(), out breakHours);
-                        if (breakHours > breakTimeLimitHours)
-                        {
-                            excessBreakCount++;
-                        }
-                    }
+                    decimal breakHoursVal = 0m;
+                    decimal.TryParse(att.breakhours?.ToString(), out breakHoursVal);
+                    if (breakHoursVal > breakTimeLimitHours) excessBreakCount++;
                 }
 
-                // Dynamic absence calculation: count working days with no clock-in and no approved leave
                 int absentCount = 0;
                 {
-                    // Get employee DOJ (Part 3 - Safe DOJ Parse)
-                    var dojSql = "SELECT COALESCE(dateofjoining, CURRENT_DATE)::timestamp FROM t_users WHERE empid = @EmpId";
-                    var empDojRaw = await _dbConnection.ExecuteScalarAsync(dojSql, new { EmpId = empId });
-                    DateTime empDoj = DateTime.Today;
-                    if (empDojRaw != null && !DateTime.TryParse(empDojRaw.ToString(), out empDoj))
-                    {
-                        empDoj = DateTime.Today;
-                    }
-
-                    // Get attendance dates for this month
-                    var attDatesSql = @"SELECT DATE(attendancedate)::timestamp as adate FROM t_attendance 
-                        WHERE empid = @EmpId AND EXTRACT(MONTH FROM attendancedate) = @Month AND EXTRACT(YEAR FROM attendancedate) = @Year";
-                    var attDatesRaw = await _dbConnection.QueryAsync<DateTime?>(attDatesSql, new { EmpId = empId, Month = targetMonth, Year = targetYear });
-                    var attDatesSet = new HashSet<DateTime>();
-                    foreach (var d in attDatesRaw ?? System.Linq.Enumerable.Empty<DateTime?>())
-                    {
-                        if (d.HasValue) attDatesSet.Add(d.Value.Date);
-                    }
-
-                    // Get approved leaves for this month
-                    var leavesSql = @"SELECT leavedate::timestamp FROM t_leaves WHERE empid = @EmpId AND status = 'Approved' 
-                        AND EXTRACT(MONTH FROM leavedate) = @Month AND EXTRACT(YEAR FROM leavedate) = @Year";
-                    var leaveDatesRaw = await _dbConnection.QueryAsync<DateTime?>(leavesSql, new { EmpId = empId, Month = targetMonth, Year = targetYear });
-                    var leaveDatesSet = new HashSet<DateTime>();
-                    foreach (var d in leaveDatesRaw ?? System.Linq.Enumerable.Empty<DateTime?>())
-                    {
-                        if (d.HasValue) leaveDatesSet.Add(d.Value.Date);
-                    }
+                    DateTime empDoj = dojDict.TryGetValue(empId, out DateTime fetchedDoj) ? fetchedDoj : DateTime.Today;
+                    var attDatesSet  = attDatesDict.TryGetValue(empId,   out var fAtt)   ? fAtt   : new HashSet<DateTime>();
+                    var leaveDatesSet= leaveDatesDict.TryGetValue(empId, out var fLeave) ? fLeave : new HashSet<DateTime>();
 
                     var monthStart = new DateTime(targetYear, targetMonth, 1);
-                    var monthEnd = new DateTime(targetYear, targetMonth, DateTime.DaysInMonth(targetYear, targetMonth));
-                    // Don't count future days as absent
+                    var monthEnd   = new DateTime(targetYear, targetMonth, DateTime.DaysInMonth(targetYear, targetMonth));
                     if (monthEnd > DateTime.Today) monthEnd = DateTime.Today;
-                    // Don't count days before DOJ
-                    if (monthStart < empDoj.Date) monthStart = empDoj.Date;
+                    if (monthStart < empDoj.Date)  monthStart = empDoj.Date;
 
                     for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
                     {
                         string dayName = Models.Space.DayOfWeekToShortName(d.DayOfWeek);
-                        if (!workingDaysList.Contains(dayName, StringComparer.OrdinalIgnoreCase)) continue; // off-day
-                        if (attDatesSet.Contains(d.Date)) continue; // present
-                        if (leaveDatesSet.Contains(d.Date)) continue; // on leave
+                        if (!workingDaysList.Contains(dayName, StringComparer.OrdinalIgnoreCase)) continue;
+                        if (attDatesSet.Contains(d.Date))   continue;
+                        if (leaveDatesSet.Contains(d.Date)) continue;
                         absentCount++;
                     }
                 }
 
                 int pendingTaskCount = 0;
-                List<dynamic> tasks = null;
-                if (taskGroup.TryGetValue(empId, out var foundTasks))
-                {
-                    tasks = foundTasks;
-                }
-                tasks ??= new List<dynamic>();
-
+                var tasks = taskGroup.TryGetValue(empId, out var foundTasks) ? foundTasks : new List<dynamic>();
                 foreach (var task in tasks)
                 {
                     string tstatus = task.taskstatus?.ToString() ?? "";
                     if (!tstatus.Equals("Completed", StringComparison.OrdinalIgnoreCase) &&
-                        !tstatus.Equals("Complete", StringComparison.OrdinalIgnoreCase) &&
-                        !tstatus.Equals("Resolve", StringComparison.OrdinalIgnoreCase))
+                        !tstatus.Equals("Complete",  StringComparison.OrdinalIgnoreCase) &&
+                        !tstatus.Equals("Resolve",   StringComparison.OrdinalIgnoreCase))
                     {
                         pendingTaskCount++;
                     }
                 }
 
                 decimal totalPerformanceDeduction = 0m;
-                
+
                 void ProcessPenalty(Deduction? customDed, string defaultName, decimal defaultValue, int occurrences, decimal rate, string penaltyType)
                 {
                     decimal amt = applyPenalties ? (occurrences * rate) : 0m;
                     if (amt <= 0m) return;
-                    
+
                     string pName = customDed != null ? customDed.Name : defaultName;
                     string pType = customDed != null ? customDed.Type : "Fixed";
                     decimal pVal = customDed != null ? customDed.Value : defaultValue;
-                    
-                    string rateText = pType.Equals("Percentage", StringComparison.OrdinalIgnoreCase) 
-                        ? $"{pVal.ToString("0.##")}% of Basic" 
-                        : $"₹{pVal.ToString("0.##")}";
-                    
+
+                    string rateText = pType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
+                        ? $"{pVal:0.##}% of Basic"
+                        : $"₹{pVal:0.##}";
+
                     string unitLabel = penaltyType switch
                     {
-                        "Absent" => occurrences == 1 ? "absence" : "absences",
-                        "Late" => occurrences == 1 ? "late clock-in" : "late clock-ins",
-                        "Early Exit" => occurrences == 1 ? "early exit" : "early exits",
-                        "Excess Break" => occurrences == 1 ? "excess break" : "excess breaks",
-                        "Pending Tasks" => occurrences == 1 ? "pending task" : "pending tasks",
-                        _ => occurrences == 1 ? "occurrence" : "occurrences"
+                        "Absent"       => occurrences == 1 ? "absence"       : "absences",
+                        "Late"         => occurrences == 1 ? "late clock-in"  : "late clock-ins",
+                        "Early Exit"   => occurrences == 1 ? "early exit"     : "early exits",
+                        "Excess Break" => occurrences == 1 ? "excess break"   : "excess breaks",
+                        "Pending Tasks"=> occurrences == 1 ? "pending task"   : "pending tasks",
+                        _              => occurrences == 1 ? "occurrence"     : "occurrences"
                     };
-                    
-                    string formattedName = $"{pName} ({occurrences} {unitLabel}, {rateText} each)";
 
                     deductionList.Add(new {
-                        Name = formattedName,
-                        Type = pType,
-                        Value = pVal,
-                        Amount = amt,
-                        DeductionType = penaltyType
+                        Name = $"{pName} ({occurrences} {unitLabel}, {rateText} each)",
+                        Type = pType, Value = pVal, Amount = amt, DeductionType = penaltyType
                     });
                     totalDeductions += amt;
                     totalPerformanceDeduction += amt;
                 }
 
-                ProcessPenalty(absentDed, "Absent Penalty", 1000m, absentCount, calibratedRates.AbsentRate, "Absent");
-                ProcessPenalty(lateDed, "Late Clock-In Penalty", 200m, lateCount, calibratedRates.LateRate, "Late");
-                ProcessPenalty(earlyExitDed, "Early Exit Penalty", 200m, earlyExitCount, calibratedRates.EarlyExitRate, "Early Exit");
-                ProcessPenalty(breakDed, "Excess Break Penalty", 150m, excessBreakCount, calibratedRates.ExcessBreakRate, "Excess Break");
-                ProcessPenalty(taskDed, "Pending Tasks Penalty", 500m, pendingTaskCount, calibratedRates.PendingTaskRate, "Pending Tasks");
+                ProcessPenalty(absentDed,   "Absent Penalty",        1000m, absentCount,      calibratedRates.AbsentRate,      "Absent");
+                ProcessPenalty(lateDed,     "Late Clock-In Penalty",  200m, lateCount,         calibratedRates.LateRate,        "Late");
+                ProcessPenalty(earlyExitDed,"Early Exit Penalty",     200m, earlyExitCount,    calibratedRates.EarlyExitRate,   "Early Exit");
+                ProcessPenalty(breakDed,    "Excess Break Penalty",   150m, excessBreakCount,  calibratedRates.ExcessBreakRate, "Excess Break");
+                ProcessPenalty(taskDed,     "Pending Tasks Penalty",  500m, pendingTaskCount,  calibratedRates.PendingTaskRate, "Pending Tasks");
 
                 var incompleteReasons = new List<string>();
                 if (absentCount > 0)
-                    incompleteReasons.Add($"{absentCount} absence(s) registered: ₹{(absentCount * calibratedRates.AbsentRate).ToString("0.##")}");
+                    incompleteReasons.Add($"{absentCount} absence(s) registered: ₹{(absentCount * calibratedRates.AbsentRate):0.##}");
                 if (lateCount > 0)
-                    incompleteReasons.Add($"{lateCount} late clock-in(s) (> 5 mins): ₹{(lateCount * calibratedRates.LateRate).ToString("0.##")}");
+                    incompleteReasons.Add($"{lateCount} late clock-in(s) (> 5 mins): ₹{(lateCount * calibratedRates.LateRate):0.##}");
                 if (earlyExitCount > 0)
-                    incompleteReasons.Add($"{earlyExitCount} early exit(s): ₹{(earlyExitCount * calibratedRates.EarlyExitRate).ToString("0.##")}");
+                    incompleteReasons.Add($"{earlyExitCount} early exit(s): ₹{(earlyExitCount * calibratedRates.EarlyExitRate):0.##}");
                 if (excessBreakCount > 0)
-                    incompleteReasons.Add($"{excessBreakCount} excess break duration incident(s): ₹{(excessBreakCount * calibratedRates.ExcessBreakRate).ToString("0.##")}");
+                    incompleteReasons.Add($"{excessBreakCount} excess break duration incident(s): ₹{(excessBreakCount * calibratedRates.ExcessBreakRate):0.##}");
                 if (pendingTaskCount > 0)
-                    incompleteReasons.Add($"{pendingTaskCount} pending task(s) in queue: ₹{(pendingTaskCount * calibratedRates.PendingTaskRate).ToString("0.##")}");
+                    incompleteReasons.Add($"{pendingTaskCount} pending task(s) in queue: ₹{(pendingTaskCount * calibratedRates.PendingTaskRate):0.##}");
                 if (!salaryConfigured)
-                    incompleteReasons.Add($"Salary not configured in database (using default fallback ₹{basicSalary:0.##})");
+                    incompleteReasons.Add($"Salary not configured (using default ₹{basicSalary:0.##})");
 
-                string profileStatus = (absentCount > 0 || lateCount > 0 || earlyExitCount > 0 || excessBreakCount > 0 || pendingTaskCount > 0 || !salaryConfigured) ? "Incomplete" : "Complete";
+                string profileStatus = (absentCount > 0 || lateCount > 0 || earlyExitCount > 0 ||
+                                        excessBreakCount > 0 || pendingTaskCount > 0 || !salaryConfigured)
+                    ? "Incomplete" : "Complete";
 
-                decimal finalAmount = basicSalary + totalAllowances - totalDeductions;
-                finalAmount = Math.Max(0m, finalAmount);
+                decimal finalAmount = Math.Max(0m, basicSalary + totalAllowances - totalDeductions);
 
-                string paymentStatus = "Pending";
-                if (paymentStatusDict.TryGetValue(empId, out string pStatus))
-                {
-                    paymentStatus = pStatus;
-                }
+                string paymentStatus = paymentStatusDict.TryGetValue(empId, out string pStatus) ? pStatus : "Pending";
 
                 results.Add(new {
                     EmpId = empId,
@@ -792,7 +759,6 @@ public class SpaceRepository : ISpaceRepository
             {
                 Console.WriteLine("EMP ERROR: " + empId);
                 Console.WriteLine(ex.ToString());
-
                 int fallbackId = 0;
                 int.TryParse(emp.empid?.ToString(), out fallbackId);
 
@@ -813,7 +779,7 @@ public class SpaceRepository : ISpaceRepository
                     PaymentStatus = "Pending",
                     Allowances = new List<dynamic> {
                         new { Name = "HRA", Type = "Fixed", Value = 10000m, Amount = 10000m },
-                        new { Name = "DA", Type = "Fixed", Value = 3000m, Amount = 3000m }
+                        new { Name = "DA",  Type = "Fixed", Value = 3000m,  Amount = 3000m  }
                     },
                     Deductions = new List<dynamic>(),
                     AccountNumber = emp.accountnumber?.ToString(),
@@ -822,7 +788,6 @@ public class SpaceRepository : ISpaceRepository
                     IfscCode = emp.ifsccode?.ToString(),
                     UpiId = emp.upiid?.ToString()
                 });
-                
                 continue;
             }
         }

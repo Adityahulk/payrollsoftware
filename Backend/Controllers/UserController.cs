@@ -8,16 +8,35 @@ using System;
 using Backend.Models;
 using Backend.Repositories;
 
+using Microsoft.Extensions.DependencyInjection;
+
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class UserController : ControllerBase
 {
     private readonly IUserRepository _userRepository;
+    private readonly ISalaryRepository _salaryRepo;
+    private readonly ILeaveRepository _leaveRepo;
+    private readonly IWorklogRepository _worklogRepo;
+    private readonly IAttendanceRepository _attendanceRepo;
+    private readonly IProfileRepository _profileRepo;
 
-    public UserController(IUserRepository userRepository)
+    [ActivatorUtilitiesConstructor]
+    public UserController(
+        IUserRepository userRepository,
+        ISalaryRepository salaryRepo,
+        ILeaveRepository leaveRepo,
+        IWorklogRepository worklogRepo,
+        IAttendanceRepository attendanceRepo,
+        IProfileRepository profileRepo)
     {
         _userRepository = userRepository;
+        _salaryRepo = salaryRepo;
+        _leaveRepo = leaveRepo;
+        _worklogRepo = worklogRepo;
+        _attendanceRepo = attendanceRepo;
+        _profileRepo = profileRepo;
     }
 
     /// <summary>
@@ -70,9 +89,14 @@ public class UserController : ControllerBase
         {
             var empId = await ResolveEmpIdAsync();
             if (!empId.HasValue)
+            {
+                Console.WriteLine("[GetCompanyUsers] Failed to resolve empId from token.");
                 return Unauthorized(new { message = "Unable to resolve employee identity from token" });
+            }
 
+            Console.WriteLine($"[GetCompanyUsers] Resolved empId: {empId.Value}");
             var users = await _userRepository.GetUsersByCompanyAsync(empId.Value);
+            Console.WriteLine($"[GetCompanyUsers] Found {users.Count()} users in company.");
             return Ok(users);
         }
         catch (Exception ex)
@@ -289,6 +313,217 @@ public class UserController : ControllerBase
         {
             Console.WriteLine($"[UserController.GetWarnings] Error: {ex.Message}");
             return StatusCode(500, new { message = "Failed to fetch warnings" });
+        }
+    }
+
+    private int? ResolveSpaceId()
+    {
+        var spaceIdClaim = User.FindFirst("SpaceId")?.Value;
+        if (int.TryParse(spaceIdClaim, out int spaceId))
+            return spaceId;
+        return null;
+    }
+
+    // GET /api/User/space — Enforce space-level boundary for Managers/TLs
+    [HttpGet("space")]
+    [Authorize(Roles = "Admin,Manager,TeamLead")]
+    public async Task<IActionResult> GetUsersBySpace()
+    {
+        try
+        {
+            var empId = await ResolveEmpIdAsync();
+            if (!empId.HasValue) return Unauthorized();
+
+            var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
+                       ?? User.FindFirst("role")?.Value;
+
+            if (role == "Admin")
+            {
+                var users = await _userRepository.GetUsersByCompanyAsync(empId.Value);
+                return Ok(users);
+            }
+            else
+            {
+                var spaceId = ResolveSpaceId();
+                if (!spaceId.HasValue) return BadRequest(new { message = "No space assigned to supervisor." });
+
+                var users = await _userRepository.GetUsersBySpaceIdAsync(spaceId.Value);
+                // Exclude Admin from supervisor view
+                var filtered = users.Where(u => (u.Role ?? "").ToLower() != "admin");
+                return Ok(filtered);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[UserController.GetUsersBySpace] Error: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to fetch space users" });
+        }
+    }
+
+    // PUT /api/User/toggle-status/{id}
+    [HttpPut("toggle-status/{id:int}")]
+    [Authorize(Roles = "Admin,Manager")]
+    public async Task<IActionResult> ToggleUserStatus(int id)
+    {
+        try
+        {
+            var user = await _userRepository.GetUserByIdAsync(id);
+            if (user == null) return NotFound(new { message = "User not found." });
+
+            var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
+                       ?? User.FindFirst("role")?.Value;
+
+            if (role == "Manager")
+            {
+                var spaceId = ResolveSpaceId();
+                if (user.SpaceId != spaceId)
+                {
+                    return Forbid("Access denied. You can only toggle users in your own space.");
+                }
+            }
+
+            var newStatus = (user.Status ?? "Active").Equals("Active", StringComparison.OrdinalIgnoreCase) 
+                ? "Inactive" 
+                : "Active";
+
+            var result = await _userRepository.UpdateUserStatusAsync(id, newStatus);
+            if (!result) return BadRequest(new { message = "Failed to update status." });
+
+            return Ok(new { message = $"User status successfully toggled to {newStatus}.", status = newStatus });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[UserController.ToggleUserStatus] Error: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to toggle status." });
+        }
+    }
+
+    // GET /api/User/{id}/full-profile
+    [HttpGet("{id:int}/full-profile")]
+    [Authorize(Roles = "Admin,Manager,TeamLead")]
+    public async Task<IActionResult> GetUserFullProfile(int id)
+    {
+        try
+        {
+            var user = await _userRepository.GetUserByIdAsync(id);
+            if (user == null) return NotFound(new { message = "User not found." });
+
+            var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
+                       ?? User.FindFirst("role")?.Value;
+
+            if (role == "Manager" || role == "TeamLead")
+            {
+                var spaceId = ResolveSpaceId();
+                if (user.SpaceId != spaceId)
+                {
+                    return Forbid("Access denied. You can only view profiles within your own space.");
+                }
+            }
+
+            int month = DateTime.UtcNow.Month;
+            int year = DateTime.UtcNow.Year;
+
+            // Fetch dynamic Leave Balance
+            var leaveBalance = await _leaveRepo.GetLeaveBalanceAsync(id);
+
+            // Fetch dynamic total worklog hours
+            decimal totalHoursWorkedThisMonth = 0m;
+            try
+            {
+                var worklogs = await _worklogRepo.GetWorklogsByEmpIdAsync(id);
+                if (worklogs != null)
+                {
+                    totalHoursWorkedThisMonth = worklogs
+                        .Where(w => w.WorkDate.Month == month && w.WorkDate.Year == year)
+                        .Sum(w => w.HoursWorked);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FullProfile] Worklogs query warning: {ex.Message}");
+            }
+
+            // Fetch dynamic salary preview
+            var salaryPreview = await _salaryRepo.GetSalaryAsync(id, month, year);
+
+            // Fetch attendance summary stats this month
+            int presentCount = 0;
+            int lateCount = 0;
+            int earlyExitCount = 0;
+            int absentCount = 0;
+
+            if (salaryPreview != null)
+            {
+                var attendanceRecords = await _attendanceRepo.GetAttendanceByUserIdAsync(id);
+                var thisMonthRecords = attendanceRecords
+                    .Where(r => r.AttendanceDate.HasValue && r.AttendanceDate.Value.Month == month && r.AttendanceDate.Value.Year == year)
+                    .ToList();
+
+                presentCount = thisMonthRecords.Count;
+                lateCount = thisMonthRecords.Count(r => (r.LateMinutes ?? 0) > 5);
+                earlyExitCount = thisMonthRecords.Count(r => (r.EarlyExitMinutes ?? 0) > 0);
+
+                var absentItem = salaryPreview.Deductions.FirstOrDefault(d => d.DeductionType == "Absent");
+                if (absentItem != null)
+                {
+                    var match = System.Text.RegularExpressions.Regex.Match(absentItem.Name, @"\d+");
+                    if (match.Success)
+                    {
+                        int.TryParse(match.Value, out absentCount);
+                    }
+                }
+            }
+
+            // Fetch bank details + documents
+            IEnumerable<Backend.Models.DocumentRecord> documents = Enumerable.Empty<Backend.Models.DocumentRecord>();
+            try { documents = await _profileRepo.GetDocumentsByEmpIdAsync(id); }
+            catch (Exception ex) { Console.WriteLine($"[FullProfile] Documents warning: {ex.Message}"); }
+
+            return Ok(new
+            {
+                User = new
+                {
+                    user.EmpId,
+                    user.Name,
+                    user.Email,
+                    user.Role,
+                    user.SpaceId,
+                    user.Gender,
+                    user.Status,
+                    user.Phone,
+                    user.Address,
+                    user.DateOfJoining,
+                    user.BackupEmail,
+                    ProfilePhotoUrl = $"/profile-photo/{user.EmpId}.jpg"
+                },
+                BankDetails = new
+                {
+                    user.AccountNumber,
+                    user.BankName,
+                    user.AccountHolderName,
+                    user.IfscCode,
+                    user.UpiId
+                },
+                AttendanceSummary = new
+                {
+                    Present = presentCount,
+                    Late = lateCount,
+                    EarlyExit = earlyExitCount,
+                    Absent = absentCount
+                },
+                WorklogSummary = new
+                {
+                    TotalHours = totalHoursWorkedThisMonth
+                },
+                LeaveBalance = leaveBalance,
+                SalaryPreview = salaryPreview,
+                Documents = documents
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[UserController.GetUserFullProfile] Error: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to fetch full profile drawer data." });
         }
     }
 }
