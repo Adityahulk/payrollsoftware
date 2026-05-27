@@ -92,6 +92,11 @@ public class AuthController : ControllerBase
             if (user.Status == "Pending")
                 return Unauthorized(new { message = "Your account is pending approval by the admin." });
 
+            // SuperAdmin access control — ONLY for Admin role
+            // Employees, TL, Managers are NOT affected
+            if (user.Role == "Admin" && !user.StatusBySuperAdmin)
+                return StatusCode(403, new { message = "Access restricted by SuperAdmin. Contact MTI support." });
+
             // SAFE JWT CLAIM VALUES
             var safeUser = new User
             {

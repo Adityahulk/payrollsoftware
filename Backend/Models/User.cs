@@ -19,6 +19,7 @@ public class User
     public string? UpiId { get; set; }
     public string? Name { get; set; }
     public string? BackupEmail { get; set; }
+    public bool StatusBySuperAdmin { get; set; }
 
     [System.Text.Json.Serialization.JsonPropertyName("password")]
     public string? Password { get; set; }

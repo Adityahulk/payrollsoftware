@@ -53,7 +53,8 @@ public class UserRepository : IUserRepository
             accountholdername,
             ifsccode,
             upiid,
-            backupemail
+            backupemail,
+            COALESCE(statusbysuperadmin, FALSE) AS statusbysuperadmin
         FROM t_users
         WHERE LOWER(email) = LOWER(@Email)";
         return await _dbConnection.QueryFirstOrDefaultAsync<User>(query, new { Email = email });
