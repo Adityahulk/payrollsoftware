@@ -9,7 +9,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Configuration;
-using System;
+using Microsoft.Extensions.Caching.Memory;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -18,12 +18,24 @@ public class AuthController : ControllerBase
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration _configuration;
     private readonly Backend.Services.INotificationService _notificationService;
+    private readonly Backend.Repositories.ISuperAdminRepository _superAdminRepository;
+    private readonly Microsoft.Extensions.Caching.Memory.IMemoryCache _cache;
+    private readonly Resend.IResend _resend;
 
-    public AuthController(IUserRepository userRepository, IConfiguration configuration, Backend.Services.INotificationService notificationService)
+    public AuthController(
+        IUserRepository userRepository,
+        IConfiguration configuration,
+        Backend.Services.INotificationService notificationService,
+        Backend.Repositories.ISuperAdminRepository superAdminRepository,
+        Microsoft.Extensions.Caching.Memory.IMemoryCache cache,
+        Resend.IResend resend)
     {
         _userRepository = userRepository;
         _configuration = configuration;
         _notificationService = notificationService;
+        _superAdminRepository = superAdminRepository;
+        _cache = cache;
+        _resend = resend;
     }
 
     [HttpPost("login")]
@@ -34,7 +46,43 @@ public class AuthController : ControllerBase
             var user = await _userRepository.GetUserByEmailAsync(request.Email);
 
             if (user == null)
-                return Unauthorized(new { message = "Invalid email or password" });
+            {
+                // Fallback: Check if this is a SuperAdmin login
+                var superAdmin = await _superAdminRepository.GetSuperAdminByEmailAsync(request.Email.Trim());
+                if (superAdmin == null)
+                {
+                    return Unauthorized(new { message = "Invalid email or password" });
+                }
+
+                // Verify SuperAdmin password
+                var superHasher = new Microsoft.AspNetCore.Identity.PasswordHasher<object>();
+                var verifySuperResult = superHasher.VerifyHashedPassword(new object(), superAdmin.PasswordHash, request.Password);
+                if (verifySuperResult != Microsoft.AspNetCore.Identity.PasswordVerificationResult.Success &&
+                    verifySuperResult != Microsoft.AspNetCore.Identity.PasswordVerificationResult.SuccessRehashNeeded)
+                {
+                    return Unauthorized(new { message = "Invalid email or password" });
+                }
+
+                // Generate JWT with SuperAdmin role
+                var superUser = new User
+                {
+                    EmpId = superAdmin.Id,
+                    Email = superAdmin.Email,
+                    Role = "SuperAdmin",
+                    SpaceId = 0
+                };
+                var superToken = GenerateJwtToken(superUser);
+
+                return Ok(new
+                {
+                    Token = superToken,
+                    Role = superUser.Role,
+                    EmpId = superUser.EmpId,
+                    SpaceId = superUser.SpaceId,
+                    Name = superAdmin.Name,
+                    Email = superAdmin.Email
+                });
+            }
 
             if (string.IsNullOrEmpty(user.PasswordHash))
                 return StatusCode(500, "Password missing in DB");
@@ -198,10 +246,12 @@ public class AuthController : ControllerBase
             if (string.IsNullOrEmpty(request.Email))
                 return BadRequest(new { message = "Email is required" });
 
-            var user = await _userRepository.GetUserByEmailAsync(request.Email);
+            var emailNormalized = request.Email.Trim();
+            var user = await _userRepository.GetUserByEmailAsync(emailNormalized);
+            var superAdmin = await _superAdminRepository.GetSuperAdminByEmailAsync(emailNormalized);
 
             // "Do NOT expose if email exists or not (security best practice)"
-            if (user == null)
+            if (user == null && superAdmin == null)
             {
                 return Ok(new { message = "If your email is registered in our system, a 6-digit OTP has been sent." });
             }
@@ -209,51 +259,46 @@ public class AuthController : ControllerBase
             // Generate 6-digit OTP
             var rand = new Random();
             string otp = rand.Next(100000, 999999).ToString();
-            var expiresAt = DateTime.UtcNow.AddMinutes(5); // valid for 5 minutes
+            string targetEmail = emailNormalized;
+            bool isSuperAdmin = superAdmin != null;
 
-            // Save to DB
-            await _userRepository.CreateOtpAsync(user.EmpId, otp, expiresAt);
+            if (!isSuperAdmin && user != null)
+            {
+                var expiresAt = DateTime.UtcNow.AddMinutes(5); // valid for 5 minutes
+                await _userRepository.CreateOtpAsync(user.EmpId, otp, expiresAt);
+                targetEmail = !string.IsNullOrEmpty(user.BackupEmail) ? user.BackupEmail : user.Email!;
+            }
+            else
+            {
+                // SuperAdmin OTP - store in cache for 30 minutes
+                var cacheKey = $"SA_OTP_{emailNormalized}";
+                _cache.Set(cacheKey, otp, TimeSpan.FromMinutes(30));
+            }
 
-            // Determine target email (backupemail if available, else primary email)
-            string targetEmail = !string.IsNullOrEmpty(user.BackupEmail) ? user.BackupEmail : user.Email!;
-
-            // Send Email (SMTP with Console/File Mock Fallback)
-            string subject = "Password Reset OTP";
-            string body = $"Your OTP is: {otp}\nValid for 5 minutes";
-
+            // Send Email via Resend SDK
             try
             {
-                var smtpConfig = _configuration.GetSection("Smtp");
-                if (smtpConfig.Exists() && !string.IsNullOrEmpty(smtpConfig["Host"]))
-                {
-                    using (var mail = new System.Net.Mail.MailMessage())
-                    {
-                        mail.From = new System.Net.Mail.MailAddress(smtpConfig["From"] ?? "noreply@hrms.com");
-                        mail.To.Add(targetEmail);
-                        mail.Subject = subject;
-                        mail.Body = body;
+                var message = new Resend.EmailMessage();
+                message.From = "VeriFind <otp@support.payrollmicrotechnique.store>";
+                message.To.Add(targetEmail);
+                message.Subject = "Password Reset OTP";
+                message.HtmlBody = $@"
+                    <div style='font-family:sans-serif'>
+                        <h2>Your OTP Code</h2>
+                        <h1>{otp}</h1>
+                        <p>This OTP is valid for {(isSuperAdmin ? "30" : "5")} minutes.</p>
+                    </div>";
 
-                        using (var smtp = new System.Net.Mail.SmtpClient(smtpConfig["Host"], int.Parse(smtpConfig["Port"] ?? "587")))
-                        {
-                            smtp.Credentials = new System.Net.NetworkCredential(smtpConfig["Username"], smtpConfig["Password"]);
-                            smtp.EnableSsl = bool.Parse(smtpConfig["EnableSsl"] ?? "true");
-                            await smtp.SendMailAsync(mail);
-                        }
-                    }
-                    System.Console.WriteLine($"[SMTP] Successfully sent password reset OTP to {targetEmail}");
-                }
-                else
-                {
-                    throw new Exception("SMTP settings not configured in appsettings.json.");
-                }
+                await _resend.EmailSendAsync(message);
+                System.Console.WriteLine($"[Resend SDK] Successfully sent password reset OTP to {targetEmail}. OTP: {otp}");
             }
             catch (Exception ex)
             {
                 System.Console.WriteLine("==========================================================================");
-                System.Console.WriteLine($"[SMTP DEV MOCK] FAILED TO SEND REAL EMAIL: {ex.Message}");
-                System.Console.WriteLine($"[SMTP DEV MOCK] TARGET: {targetEmail}");
-                System.Console.WriteLine($"[SMTP DEV MOCK] SUBJECT: {subject}");
-                System.Console.WriteLine($"[SMTP DEV MOCK] BODY: {body}");
+                System.Console.WriteLine($"[Resend DEV MOCK] FAILED TO SEND REAL EMAIL via SDK: {ex.Message}");
+                System.Console.WriteLine($"[Resend DEV MOCK] TARGET: {targetEmail}");
+                System.Console.WriteLine($"[Resend DEV MOCK] SUBJECT: Password Reset OTP");
+                System.Console.WriteLine($"[Resend DEV MOCK] BODY: Your OTP is: {otp}");
                 System.Console.WriteLine("==========================================================================");
             }
 
@@ -274,17 +319,36 @@ public class AuthController : ControllerBase
             if (string.IsNullOrEmpty(request.Email) || string.IsNullOrEmpty(request.Otp))
                 return BadRequest(new { message = "Email and OTP are required" });
 
-            var user = await _userRepository.GetUserByEmailAsync(request.Email);
-            if (user == null)
+            var emailNormalized = request.Email.Trim();
+            var user = await _userRepository.GetUserByEmailAsync(emailNormalized);
+            var superAdmin = await _superAdminRepository.GetSuperAdminByEmailAsync(emailNormalized);
+
+            if (user == null && superAdmin == null)
                 return BadRequest(new { message = "Invalid email or OTP." });
 
-            var otpRecord = await _userRepository.GetActiveOtpAsync(user.EmpId, request.Otp);
-            if (otpRecord == null)
+            if (superAdmin != null)
             {
-                return BadRequest(new { message = "Invalid, expired, or already used OTP." });
+                // SuperAdmin Verification
+                var cacheKey = $"SA_OTP_{emailNormalized}";
+                if (_cache.TryGetValue(cacheKey, out string? cachedOtp) && cachedOtp == request.Otp.Trim())
+                {
+                    // Store verification token in cache for 30 minutes
+                    var verifiedKey = $"SA_VERIFIED_{emailNormalized}";
+                    _cache.Set(verifiedKey, request.Otp.Trim(), TimeSpan.FromMinutes(30));
+                    return Ok(new { message = "OTP verified successfully. You may now reset your password." });
+                }
+                return BadRequest(new { message = "Invalid or expired OTP." });
             }
-
-            return Ok(new { message = "OTP verified successfully. You may now reset your password." });
+            else
+            {
+                // Standard User Verification
+                var otpRecord = await _userRepository.GetActiveOtpAsync(user!.EmpId, request.Otp.Trim());
+                if (otpRecord == null)
+                {
+                    return BadRequest(new { message = "Invalid, expired, or already used OTP." });
+                }
+                return Ok(new { message = "OTP verified successfully. You may now reset your password." });
+            }
         }
         catch (Exception ex)
         {
@@ -301,47 +365,73 @@ public class AuthController : ControllerBase
             if (string.IsNullOrEmpty(request.Email) || string.IsNullOrEmpty(request.Otp) || string.IsNullOrEmpty(request.NewPassword))
                 return BadRequest(new { message = "Email, OTP, and new password are required" });
 
-            var user = await _userRepository.GetUserByEmailAsync(request.Email);
-            if (user == null)
+            var emailNormalized = request.Email.Trim();
+            var user = await _userRepository.GetUserByEmailAsync(emailNormalized);
+            var superAdmin = await _superAdminRepository.GetSuperAdminByEmailAsync(emailNormalized);
+
+            if (user == null && superAdmin == null)
                 return BadRequest(new { message = "Invalid request." });
 
-            var otpRecord = await _userRepository.GetActiveOtpAsync(user.EmpId, request.Otp);
-            if (otpRecord == null)
+            if (superAdmin != null)
             {
-                return BadRequest(new { message = "Invalid or expired OTP session." });
-            }
-
-            // Hashing the new password
-            var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<User>();
-            string hashedNew = hasher.HashPassword(user, request.NewPassword);
-
-            await _userRepository.UpdatePasswordHashAsync(user.EmpId, hashedNew);
-
-            // Mark OTP as used
-            int otpId = 0;
-            if (otpRecord is IDictionary<string, object> dict)
-            {
-                if (dict.TryGetValue("id", out var idVal) || dict.TryGetValue("Id", out idVal))
+                // Verify SuperAdmin token in cache
+                var verifiedKey = $"SA_VERIFIED_{emailNormalized}";
+                if (!_cache.TryGetValue(verifiedKey, out string? cachedVerifiedOtp) || cachedVerifiedOtp != request.Otp.Trim())
                 {
-                    otpId = Convert.ToInt32(idVal);
+                    return BadRequest(new { message = "Invalid or expired OTP session." });
                 }
-            }
-            if (otpId > 0)
-            {
-                await _userRepository.MarkOtpAsUsedAsync(otpId);
-            }
 
-            // Broadcast real-time PasswordReset notification
-            try
-            {
-                await _notificationService.NotifyPasswordResetAsync(user.EmpId, user.Email ?? "", user.SpaceId ?? 0);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[PasswordReset Notification Error] {ex.Message}");
-            }
+                // Update SuperAdmin Password
+                var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<object>();
+                string hashedNew = hasher.HashPassword(new object(), request.NewPassword);
+                superAdmin.PasswordHash = hashedNew;
+                await _superAdminRepository.UpdateSuperAdminAsync(superAdmin);
 
-            return Ok(new { message = "Password reset successfully. You can now login with your new password." });
+                // Clear cache entries
+                _cache.Remove($"SA_OTP_{emailNormalized}");
+                _cache.Remove(verifiedKey);
+
+                return Ok(new { message = "Password reset successfully. You can now login with your new password." });
+            }
+            else
+            {
+                // Standard User Reset
+                var otpRecord = await _userRepository.GetActiveOtpAsync(user!.EmpId, request.Otp.Trim());
+                if (otpRecord == null)
+                {
+                    return BadRequest(new { message = "Invalid or expired OTP session." });
+                }
+
+                var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<User>();
+                string hashedNew = hasher.HashPassword(user, request.NewPassword);
+                await _userRepository.UpdatePasswordHashAsync(user.EmpId, hashedNew);
+
+                // Mark OTP as used
+                int otpId = 0;
+                if (otpRecord is IDictionary<string, object> dict)
+                {
+                    if (dict.TryGetValue("id", out var idVal) || dict.TryGetValue("Id", out idVal))
+                    {
+                        otpId = Convert.ToInt32(idVal);
+                    }
+                }
+                if (otpId > 0)
+                {
+                    await _userRepository.MarkOtpAsUsedAsync(otpId);
+                }
+
+                // Broadcast real-time PasswordReset notification
+                try
+                {
+                    await _notificationService.NotifyPasswordResetAsync(user.EmpId, user.Email ?? "", user.SpaceId ?? 0);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[PasswordReset Notification Error] {ex.Message}");
+                }
+
+                return Ok(new { message = "Password reset successfully. You can now login with your new password." });
+            }
         }
         catch (Exception ex)
         {

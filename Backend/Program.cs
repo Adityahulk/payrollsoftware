@@ -3,13 +3,19 @@ using Npgsql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using Resend;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllers();
+builder.Services.AddMemoryCache();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddResend(options =>
+{
+    options.ApiToken = builder.Configuration["Resend:ApiToken"] ?? "re_Yb5aEZwg_7QCWZdiGJQsYVbJqSN9wKWZY";
+});
 
 // Allow large multipart uploads for file uploads (profile photo + documents)
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
@@ -21,9 +27,18 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod();
+        policy.WithOrigins(
+            "https://payrollmicrotechnique.store",
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3001",
+            "http://[::1]:3000",
+            "http://[::1]:3001"
+        )
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials(); // Required for SignalR connection with credentials
     });
 });
 
@@ -64,6 +79,7 @@ builder.Services.AddScoped<Backend.Repositories.IProfileRepository, Backend.Repo
 builder.Services.AddScoped<Backend.Repositories.IAnalyticsRepository, Backend.Repositories.AnalyticsRepository>();
 builder.Services.AddScoped<Backend.Repositories.ILeaveRepository, Backend.Repositories.LeaveRepository>();
 builder.Services.AddScoped<Backend.Repositories.IDashboardRepository, Backend.Repositories.DashboardRepository>();
+builder.Services.AddScoped<Backend.Repositories.ISuperAdminRepository, Backend.Repositories.SuperAdminRepository>();
 builder.Services.AddScoped<Backend.Services.INotificationService, Backend.Services.NotificationService>();
 builder.Services.AddHostedService<Backend.Services.MonthEndHostedService>();
 
@@ -593,6 +609,67 @@ try
         catch (System.Exception ex)
         {
             System.Console.WriteLine($"[Database Reorganization Warning] Query index creation failed: {ex.Message}");
+        }
+
+        // SuperAdmin Panel database migrations
+        try
+        {
+            using (var cmd = new NpgsqlCommand(@"
+                ALTER TABLE t_users ADD COLUMN IF NOT EXISTS is_approved BOOLEAN DEFAULT FALSE;
+                ALTER TABLE t_users ADD COLUMN IF NOT EXISTS statusreason TEXT;
+                ALTER TABLE t_spaces ADD COLUMN IF NOT EXISTS maxspaces INTEGER DEFAULT 5;
+                ALTER TABLE t_users ADD COLUMN IF NOT EXISTS statusbysuperadmin BOOLEAN DEFAULT FALSE;
+
+                -- Auto-approve any existing active Admins (so they are NOT locked out)
+                UPDATE t_users SET is_approved = TRUE 
+                WHERE role = 'Admin' AND status = 'Active' AND (is_approved IS NULL OR is_approved = FALSE);
+
+                -- Set statusbysuperadmin = TRUE for existing active admins (keep working)
+                UPDATE t_users SET statusbysuperadmin = TRUE 
+                WHERE role = 'Admin' AND status = 'Active' AND (statusbysuperadmin IS NULL OR statusbysuperadmin = FALSE);
+            ", conn))
+            {
+                cmd.ExecuteNonQuery();
+                System.Console.WriteLine("[SuperAdmin Panel] Database columns and auto-approvals checked.");
+            }
+
+            using (var cmdTable = new NpgsqlCommand(@"
+                CREATE TABLE IF NOT EXISTS t_superadmins (
+                    id SERIAL PRIMARY KEY,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    passwordhash VARCHAR(255) NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            ", conn))
+            {
+                cmdTable.ExecuteNonQuery();
+                System.Console.WriteLine("[SuperAdmin Panel] t_superadmins table verified/created.");
+            }
+
+            using (var cmdCheck = new NpgsqlCommand("SELECT COUNT(1) FROM t_superadmins;", conn))
+            {
+                var count = Convert.ToInt32(cmdCheck.ExecuteScalar());
+                if (count == 0)
+                {
+                    var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<object>();
+                    var defaultPasswordHash = hasher.HashPassword(new object(), "SuperAdmin@123");
+                    using (var cmdInsert = new NpgsqlCommand(@"
+                        INSERT INTO t_superadmins (email, passwordhash, name)
+                        VALUES ('mti@super.com', @PasswordHash, 'MTI SuperAdmin');
+                    ", conn))
+                    {
+                        cmdInsert.Parameters.AddWithValue("PasswordHash", defaultPasswordHash);
+                        cmdInsert.ExecuteNonQuery();
+                    }
+                    System.Console.WriteLine("[SuperAdmin Panel] Seeded default superadmin account: mti@super.com");
+                }
+            }
+        }
+        catch (System.Exception ex)
+        {
+            System.Console.WriteLine($"[SuperAdmin Panel Migration Error] {ex.Message}");
         }
     }
 }
