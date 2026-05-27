@@ -156,7 +156,8 @@ public class SuperAdminRepository : ISuperAdminRepository
 
     public async Task<SuperAdmin?> GetSuperAdminByEmailAsync(string email)
     {
-        var query = "SELECT * FROM t_superadmins WHERE email = @Email LIMIT 1";
+        // Match emails case-insensitively so SuperAdmin auth and OTP flows behave like regular users.
+        var query = "SELECT * FROM t_superadmins WHERE LOWER(email) = LOWER(@Email) LIMIT 1";
         return await _dbConnection.QueryFirstOrDefaultAsync<SuperAdmin>(query, new { Email = email });
     }
 

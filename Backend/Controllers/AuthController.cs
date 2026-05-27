@@ -247,6 +247,7 @@ public class AuthController : ControllerBase
                 return BadRequest(new { message = "Email is required" });
 
             var emailNormalized = request.Email.Trim();
+            var emailKey = emailNormalized.ToLowerInvariant();
             var user = await _userRepository.GetUserByEmailAsync(emailNormalized);
             var superAdmin = await _superAdminRepository.GetSuperAdminByEmailAsync(emailNormalized);
 
@@ -271,7 +272,8 @@ public class AuthController : ControllerBase
             else
             {
                 // SuperAdmin OTP - store in cache for 30 minutes
-                var cacheKey = $"SA_OTP_{emailNormalized}";
+                targetEmail = superAdmin?.Email ?? emailNormalized;
+                var cacheKey = $"SA_OTP_{emailKey}";
                 _cache.Set(cacheKey, otp, TimeSpan.FromMinutes(30));
             }
 
@@ -320,6 +322,7 @@ public class AuthController : ControllerBase
                 return BadRequest(new { message = "Email and OTP are required" });
 
             var emailNormalized = request.Email.Trim();
+            var emailKey = emailNormalized.ToLowerInvariant();
             var user = await _userRepository.GetUserByEmailAsync(emailNormalized);
             var superAdmin = await _superAdminRepository.GetSuperAdminByEmailAsync(emailNormalized);
 
@@ -329,11 +332,11 @@ public class AuthController : ControllerBase
             if (superAdmin != null)
             {
                 // SuperAdmin Verification
-                var cacheKey = $"SA_OTP_{emailNormalized}";
+                var cacheKey = $"SA_OTP_{emailKey}";
                 if (_cache.TryGetValue(cacheKey, out string? cachedOtp) && cachedOtp == request.Otp.Trim())
                 {
                     // Store verification token in cache for 30 minutes
-                    var verifiedKey = $"SA_VERIFIED_{emailNormalized}";
+                    var verifiedKey = $"SA_VERIFIED_{emailKey}";
                     _cache.Set(verifiedKey, request.Otp.Trim(), TimeSpan.FromMinutes(30));
                     return Ok(new { message = "OTP verified successfully. You may now reset your password." });
                 }
@@ -366,6 +369,7 @@ public class AuthController : ControllerBase
                 return BadRequest(new { message = "Email, OTP, and new password are required" });
 
             var emailNormalized = request.Email.Trim();
+            var emailKey = emailNormalized.ToLowerInvariant();
             var user = await _userRepository.GetUserByEmailAsync(emailNormalized);
             var superAdmin = await _superAdminRepository.GetSuperAdminByEmailAsync(emailNormalized);
 
@@ -375,7 +379,7 @@ public class AuthController : ControllerBase
             if (superAdmin != null)
             {
                 // Verify SuperAdmin token in cache
-                var verifiedKey = $"SA_VERIFIED_{emailNormalized}";
+                var verifiedKey = $"SA_VERIFIED_{emailKey}";
                 if (!_cache.TryGetValue(verifiedKey, out string? cachedVerifiedOtp) || cachedVerifiedOtp != request.Otp.Trim())
                 {
                     return BadRequest(new { message = "Invalid or expired OTP session." });
@@ -388,7 +392,7 @@ public class AuthController : ControllerBase
                 await _superAdminRepository.UpdateSuperAdminAsync(superAdmin);
 
                 // Clear cache entries
-                _cache.Remove($"SA_OTP_{emailNormalized}");
+                _cache.Remove($"SA_OTP_{emailKey}");
                 _cache.Remove(verifiedKey);
 
                 return Ok(new { message = "Password reset successfully. You can now login with your new password." });
