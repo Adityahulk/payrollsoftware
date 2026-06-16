@@ -38,5 +38,16 @@ services:
     volumes:
       - ./Backend/wwwroot:/app/wwwroot
 
+  frontend:
+    build:
+      context: ./Frontend/react-crud
+    container_name: payroll_frontend_app
+    ports:
+      - "3001:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:5001
+    depends_on:
+      - backend
+
 volumes:
   payroll_postgres_data:
