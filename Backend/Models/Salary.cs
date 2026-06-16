@@ -69,3 +69,33 @@ public class CtcSummaryResponse
     public decimal AnnualNet { get; set; }
     public decimal MonthlyNet { get; set; }
 }
+
+public class EmployeePayoutItem
+{
+    public int EmpId { get; set; }
+    public decimal TotalAmount { get; set; }
+    public decimal Deduction { get; set; }
+    public decimal FinalAmount { get; set; }
+    public bool IsManual { get; set; }
+    public decimal AllowanceAmount { get; set; }
+    public decimal DeductionAmount { get; set; }
+    public decimal Basic { get; set; }
+    public decimal TotalAllowance { get; set; }
+    public decimal TotalDeduction { get; set; }
+    public string? Breakdown { get; set; }
+}
+
+public class PayrollPayoutRequest
+{
+    public List<EmployeePayoutItem> Employees { get; set; } = new();
+    public string PaymentMethod { get; set; } = "Cash"; // Cash / UPI / Razorpay
+    public string? TransactionId { get; set; }
+}
+
+public class ConfirmPaymentRequest
+{
+    public string OrderId { get; set; } = string.Empty;
+    public string PaymentId { get; set; } = string.Empty;
+    public string Signature { get; set; } = string.Empty;
+    public List<EmployeePayoutItem> Employees { get; set; } = new();
+}

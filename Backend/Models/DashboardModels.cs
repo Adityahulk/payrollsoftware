@@ -11,6 +11,10 @@ public class RecentWorklogDto
     public string Description { get; set; } = string.Empty;
     public DateTime WorkDate { get; set; }
     public DateTime CreatedAt { get; set; }
+    public DateTime? ClockIn { get; set; }
+    public DateTime? ClockOut { get; set; }
+    public DateTime? AttendanceDate { get; set; }
+    public string? TaskTitle { get; set; }
 }
 
 public class RecentEmployeeDto

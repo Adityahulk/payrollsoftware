@@ -6,58 +6,56 @@ using System.Threading.Tasks;
 using System.Linq;
 using System;
 using Backend.Models;
+using Backend.Services;
 using Backend.Repositories;
-
-using Microsoft.Extensions.DependencyInjection;
+using System.Security.Claims;
 
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class UserController : ControllerBase
 {
-    private readonly IUserRepository _userRepository;
-    private readonly ISalaryRepository _salaryRepo;
-    private readonly ILeaveRepository _leaveRepo;
-    private readonly IWorklogRepository _worklogRepo;
-    private readonly IAttendanceRepository _attendanceRepo;
+    private readonly IUserService _userService;
+    private readonly ISalaryService _salaryService;
+    private readonly ILeaveService _leaveService;
+    private readonly IWorklogService _worklogService;
+    private readonly IAttendanceService _attendanceService;
     private readonly IProfileRepository _profileRepo;
 
-    [ActivatorUtilitiesConstructor]
     public UserController(
-        IUserRepository userRepository,
-        ISalaryRepository salaryRepo,
-        ILeaveRepository leaveRepo,
-        IWorklogRepository worklogRepo,
-        IAttendanceRepository attendanceRepo,
+        IUserService userService,
+        ISalaryService salaryService,
+        ILeaveService leaveService,
+        IWorklogService worklogService,
+        IAttendanceService attendanceService,
         IProfileRepository profileRepo)
     {
-        _userRepository = userRepository;
-        _salaryRepo = salaryRepo;
-        _leaveRepo = leaveRepo;
-        _worklogRepo = worklogRepo;
-        _attendanceRepo = attendanceRepo;
+        _userService = userService;
+        _salaryService = salaryService;
+        _leaveService = leaveService;
+        _worklogService = worklogService;
+        _attendanceService = attendanceService;
         _profileRepo = profileRepo;
     }
-
-    /// <summary>
-    /// Extracts the integer EmpId from JWT claims, handling both custom "EmpId" and standard NameIdentifier claims.
-    /// </summary>
-    private async Task<int?> ResolveEmpIdAsync()
+    private int GetEmpId()
     {
-        var empIdClaim = User.FindFirst("EmpId")?.Value 
-                         ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-                         ?? User.FindFirst("nameid")?.Value;
-
-        if (string.IsNullOrEmpty(empIdClaim))
-            return null;
-
-        if (int.TryParse(empIdClaim, out int empId))
-            return empId;
-
-        // Fallback: claim may be email-based
-        var userByEmail = await _userRepository.GetUserByEmailAsync(empIdClaim);
-        return userByEmail?.EmpId;
+        var claim = User.FindFirst("EmpId")?.Value
+                 ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
     }
+
+    private int GetSpaceId()
+    {
+        var role = GetRole();
+        if (role == "Admin")
+        {
+            return GetEmpId();
+        }
+        var claim = User.FindFirst("SpaceId")?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
+    }
+
+    private string GetRole() => User.FindFirst(ClaimTypes.Role)?.Value ?? "";
 
     // GET /api/User — Admin ONLY: full company user listing
     [HttpGet]
@@ -66,17 +64,24 @@ public class UserController : ControllerBase
     {
         try
         {
-            var empId = await ResolveEmpIdAsync();
-            if (!empId.HasValue)
-                return Unauthorized(new { message = "Unable to resolve employee identity from token" });
+            var empId = GetEmpId();
+            if (empId == 0)
+                return Unauthorized(new { message = "Unable to resolve employee identity from token." });
 
-            var users = await _userRepository.GetUsersByCompanyAsync(empId.Value);
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var users = await _userService.GetUsersByCompanyAsync(empId, spaceId, role);
             return Ok(users);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.GetAllUsers] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch users" });
+            return StatusCode(500, new { message = "Failed to fetch users." });
         }
     }
 
@@ -87,44 +92,52 @@ public class UserController : ControllerBase
     {
         try
         {
-            var empId = await ResolveEmpIdAsync();
-            if (!empId.HasValue)
-            {
-                Console.WriteLine("[GetCompanyUsers] Failed to resolve empId from token.");
-                return Unauthorized(new { message = "Unable to resolve employee identity from token" });
-            }
+            var empId = GetEmpId();
+            if (empId == 0)
+                return Unauthorized(new { message = "Unable to resolve employee identity from token." });
 
-            Console.WriteLine($"[GetCompanyUsers] Resolved empId: {empId.Value}");
-            var users = await _userRepository.GetUsersByCompanyAsync(empId.Value);
-            Console.WriteLine($"[GetCompanyUsers] Found {users.Count()} users in company.");
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var users = await _userService.GetUsersByCompanyAsync(empId, spaceId, role);
             return Ok(users);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.GetCompanyUsers] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch company users" });
+            return StatusCode(500, new { message = "Failed to fetch company users." });
         }
     }
 
     // GET /api/User/team — TeamLead/Manager: all employees under same Admin (via space chain)
-    // Logic: JWT empId → spaceid → adminid → all spaces by admin → all users in those spaces
     [HttpGet("team")]
     [Authorize(Roles = "Admin,TeamLead,Manager")]
     public async Task<IActionResult> GetTeamMembers()
     {
         try
         {
-            var empId = await ResolveEmpIdAsync();
-            if (!empId.HasValue)
-                return Unauthorized(new { message = "Unable to resolve employee identity from token" });
+            var empId = GetEmpId();
+            if (empId == 0)
+                return Unauthorized(new { message = "Unable to resolve employee identity from token." });
 
-            var users = await _userRepository.GetUsersByCompanyAsync(empId.Value);
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var users = await _userService.GetUsersByCompanyAsync(empId, spaceId, role);
             return Ok(users);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.GetTeamMembers] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch team members" });
+            return StatusCode(500, new { message = "Failed to fetch team members." });
         }
     }
 
@@ -133,14 +146,21 @@ public class UserController : ControllerBase
     {
         try
         {
-            var user = await _userRepository.GetUserByIdAsync(id);
-            if (user == null) return NotFound(new { message = "User not found" });
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var user = await _userService.GetUserByIdAsync(id, spaceId, role);
+            if (user == null) return NotFound(new { message = "User not found." });
             return Ok(user);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.GetUserById] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch user" });
+            return StatusCode(500, new { message = "Failed to fetch user." });
         }
     }
 
@@ -150,28 +170,23 @@ public class UserController : ControllerBase
     {
         try
         {
-            var empId = await ResolveEmpIdAsync();
-            if (!empId.HasValue)
-                return Unauthorized();
+            var empId = GetEmpId();
+            if (empId == 0) return Unauthorized();
 
-            // Search within company-scoped users only
-            var companyUsers = await _userRepository.GetUsersByCompanyAsync(empId.Value);
-            var searchLower = (query ?? "").Trim().ToLower();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
 
-            if (string.IsNullOrEmpty(searchLower))
-                return Ok(companyUsers);
-
-            var filtered = companyUsers.Where(u =>
-                (u.Email?.ToLower().Contains(searchLower) == true) ||
-                (u.Role?.ToLower().Contains(searchLower) == true)
-            );
-
+            var filtered = await _userService.SearchUsersAsync(query, empId, spaceId, role);
             return Ok(filtered);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.SearchUsers] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Search failed" });
+            return StatusCode(500, new { message = "Search failed." });
         }
     }
 
@@ -182,7 +197,10 @@ public class UserController : ControllerBase
         try
         {
             if (user == null)
-                return BadRequest(new { message = "User data is required" });
+                return BadRequest(new { message = "User data is required." });
+
+            var spaceId = GetSpaceId();
+            var role = GetRole();
 
             user.DateOfJoining = DateTime.Today;
             user.Gender ??= "Unknown";
@@ -203,13 +221,17 @@ public class UserController : ControllerBase
             var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<User>();
             user.PasswordHash = hasher.HashPassword(user, plainPassword);
 
-            var userId = await _userRepository.CreateUserAsync(user);
+            var userId = await _userService.CreateUserAsync(user, spaceId, role);
             return CreatedAtAction(nameof(GetUserById), new { id = userId }, user);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.CreateUser] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to create user" });
+            return StatusCode(500, new { message = "Failed to create user." });
         }
     }
 
@@ -219,15 +241,23 @@ public class UserController : ControllerBase
     {
         try
         {
+            var callerEmpId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
             user.EmpId = id;
-            var result = await _userRepository.UpdateUserAsync(user);
-            if (!result) return NotFound(new { message = "User not found" });
+            var result = await _userService.UpdateUserAsync(user, callerEmpId, spaceId, role);
+            if (!result) return NotFound(new { message = "User not found." });
             return NoContent();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.UpdateUser] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to update user" });
+            return StatusCode(500, new { message = "Failed to update user." });
         }
     }
 
@@ -237,14 +267,21 @@ public class UserController : ControllerBase
     {
         try
         {
-            var result = await _userRepository.DeleteUserAsync(id);
-            if (!result) return NotFound(new { message = "User not found" });
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var result = await _userService.DeleteUserAsync(id, spaceId, role);
+            if (!result) return NotFound(new { message = "User not found." });
             return NoContent();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.DeleteUser] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to delete user" });
+            return StatusCode(500, new { message = "Failed to delete user." });
         }
     }
 
@@ -254,50 +291,48 @@ public class UserController : ControllerBase
     {
         try
         {
-            var user = await _userRepository.GetUserByIdAsync(id);
-            if (user == null) return NotFound(new { message = "User not found" });
+            var callerEmpId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
 
-            var result = await _userRepository.UpdateUserStatusAsync(id, request.Status);
-            if (!result) return BadRequest(new { message = "Invalid status value. Allowed: Active, Inactive, Pending" });
+            var result = await _userService.UpdateUserStatusAsync(id, request.Status, request.Reason, callerEmpId, spaceId, role);
+            if (!result) return BadRequest(new { message = "Failed to update status." });
 
-            // Log a warning if deactivating with a reason
-            if (request.Status?.Trim().Equals("Inactive", StringComparison.OrdinalIgnoreCase) == true 
-                && !string.IsNullOrEmpty(request.Reason))
-            {
-                var adminEmpId = await ResolveEmpIdAsync();
-
-                await _userRepository.AddWarningAsync(new EmployeeWarning
-                {
-                    EmpId = id,
-                    WarningText = $"Account deactivated. Reason: {request.Reason}",
-                    PenaltyAmount = 0,
-                    IssuedBy = adminEmpId ?? 0
-                });
-            }
-
-            return Ok(new { message = "Status updated successfully" });
+            return Ok(new { message = "Status updated successfully." });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.UpdateUserStatus] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to update status" });
+            return StatusCode(500, new { message = "Failed to update status." });
         }
     }
 
     [HttpPost("{id}/warnings")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,Manager")]
     public async Task<IActionResult> AddWarning(int id, [FromBody] EmployeeWarning warning)
     {
         try
         {
+            var callerEmpId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
             warning.EmpId = id;
-            var warningId = await _userRepository.AddWarningAsync(warning);
+            var warningId = await _userService.AddWarningAsync(warning, callerEmpId, spaceId, role);
             return Ok(new { WarningId = warningId });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.AddWarning] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to issue warning" });
+            return StatusCode(500, new { message = "Failed to issue warning." });
         }
     }
 
@@ -306,22 +341,21 @@ public class UserController : ControllerBase
     {
         try
         {
-            var warnings = await _userRepository.GetWarningsByUserIdAsync(id);
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var warnings = await _userService.GetWarningsByUserIdAsync(id, spaceId, role);
             return Ok(warnings);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.GetWarnings] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch warnings" });
+            return StatusCode(500, new { message = "Failed to fetch warnings." });
         }
-    }
-
-    private int? ResolveSpaceId()
-    {
-        var spaceIdClaim = User.FindFirst("SpaceId")?.Value;
-        if (int.TryParse(spaceIdClaim, out int spaceId))
-            return spaceId;
-        return null;
     }
 
     // GET /api/User/space — Enforce space-level boundary for Managers/TLs
@@ -331,32 +365,33 @@ public class UserController : ControllerBase
     {
         try
         {
-            var empId = await ResolveEmpIdAsync();
-            if (!empId.HasValue) return Unauthorized();
+            var empId = GetEmpId();
+            if (empId == 0) return Unauthorized();
 
-            var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
-                       ?? User.FindFirst("role")?.Value;
+            var spaceId = GetSpaceId();
+            var role = GetRole();
 
             if (role == "Admin")
             {
-                var users = await _userRepository.GetUsersByCompanyAsync(empId.Value);
+                var users = await _userService.GetUsersByCompanyAsync(empId, spaceId, role);
                 return Ok(users);
             }
             else
             {
-                var spaceId = ResolveSpaceId();
-                if (!spaceId.HasValue) return BadRequest(new { message = "No space assigned to supervisor." });
-
-                var users = await _userRepository.GetUsersBySpaceIdAsync(spaceId.Value);
+                var users = await _userService.GetUsersBySpaceIdAsync(spaceId, spaceId, role);
                 // Exclude Admin from supervisor view
                 var filtered = users.Where(u => (u.Role ?? "").ToLower() != "admin");
                 return Ok(filtered);
             }
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
         catch (Exception ex)
         {
             Console.WriteLine($"[UserController.GetUsersBySpace] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch space users" });
+            return StatusCode(500, new { message = "Failed to fetch space users." });
         }
     }
 
@@ -367,29 +402,25 @@ public class UserController : ControllerBase
     {
         try
         {
-            var user = await _userRepository.GetUserByIdAsync(id);
+            var callerEmpId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var user = await _userService.GetUserByIdAsync(id, spaceId, role);
             if (user == null) return NotFound(new { message = "User not found." });
-
-            var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
-                       ?? User.FindFirst("role")?.Value;
-
-            if (role == "Manager")
-            {
-                var spaceId = ResolveSpaceId();
-                if (user.SpaceId != spaceId)
-                {
-                    return Forbid("Access denied. You can only toggle users in your own space.");
-                }
-            }
 
             var newStatus = (user.Status ?? "Active").Equals("Active", StringComparison.OrdinalIgnoreCase) 
                 ? "Inactive" 
                 : "Active";
 
-            var result = await _userRepository.UpdateUserStatusAsync(id, newStatus);
+            var result = await _userService.UpdateUserStatusAsync(id, newStatus, "Status toggled via user management control panel", callerEmpId, spaceId, role);
             if (!result) return BadRequest(new { message = "Failed to update status." });
 
             return Ok(new { message = $"User status successfully toggled to {newStatus}.", status = newStatus });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
@@ -405,32 +436,24 @@ public class UserController : ControllerBase
     {
         try
         {
-            var user = await _userRepository.GetUserByIdAsync(id);
+            var callerEmpId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var user = await _userService.GetUserByIdAsync(id, spaceId, role);
             if (user == null) return NotFound(new { message = "User not found." });
-
-            var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
-                       ?? User.FindFirst("role")?.Value;
-
-            if (role == "Manager" || role == "TeamLead")
-            {
-                var spaceId = ResolveSpaceId();
-                if (user.SpaceId != spaceId)
-                {
-                    return Forbid("Access denied. You can only view profiles within your own space.");
-                }
-            }
 
             int month = DateTime.UtcNow.Month;
             int year = DateTime.UtcNow.Year;
 
             // Fetch dynamic Leave Balance
-            var leaveBalance = await _leaveRepo.GetLeaveBalanceAsync(id);
+            var leaveBalance = await _leaveService.GetLeaveBalanceAsync(id, callerEmpId, spaceId, role);
 
             // Fetch dynamic total worklog hours
             decimal totalHoursWorkedThisMonth = 0m;
             try
             {
-                var worklogs = await _worklogRepo.GetWorklogsByEmpIdAsync(id);
+                var worklogs = await _worklogService.GetWorklogsByEmpIdAsync(id, spaceId, role);
                 if (worklogs != null)
                 {
                     totalHoursWorkedThisMonth = worklogs
@@ -444,7 +467,7 @@ public class UserController : ControllerBase
             }
 
             // Fetch dynamic salary preview
-            var salaryPreview = await _salaryRepo.GetSalaryAsync(id, month, year);
+            var salaryPreview = await _salaryService.GetSalaryAsync(id, month, year, spaceId, role);
 
             // Fetch attendance summary stats this month
             int presentCount = 0;
@@ -454,7 +477,7 @@ public class UserController : ControllerBase
 
             if (salaryPreview != null)
             {
-                var attendanceRecords = await _attendanceRepo.GetAttendanceByUserIdAsync(id);
+                var attendanceRecords = await _attendanceService.GetAttendanceByUserIdAsync(id, spaceId, role);
                 var thisMonthRecords = attendanceRecords
                     .Where(r => r.AttendanceDate.HasValue && r.AttendanceDate.Value.Month == month && r.AttendanceDate.Value.Year == year)
                     .ToList();
@@ -476,8 +499,14 @@ public class UserController : ControllerBase
 
             // Fetch bank details + documents
             IEnumerable<Backend.Models.DocumentRecord> documents = Enumerable.Empty<Backend.Models.DocumentRecord>();
-            try { documents = await _profileRepo.GetDocumentsByEmpIdAsync(id); }
-            catch (Exception ex) { Console.WriteLine($"[FullProfile] Documents warning: {ex.Message}"); }
+            try 
+            { 
+                documents = await _profileRepo.GetDocumentsByEmpIdAsync(id); 
+            }
+            catch (Exception ex) 
+            { 
+                Console.WriteLine($"[FullProfile] Documents warning: {ex.Message}"); 
+            }
 
             return Ok(new
             {
@@ -519,6 +548,10 @@ public class UserController : ControllerBase
                 SalaryPreview = salaryPreview,
                 Documents = documents
             });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {

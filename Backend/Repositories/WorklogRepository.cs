@@ -318,4 +318,60 @@ public class WorklogRepository : IWorklogRepository
             WHERE taskid = @TaskId";
         await _db.ExecuteAsync(sql, new { Status = status, TaskId = taskId });
     }
+
+    public async Task<IEnumerable<EmployeeDailyActivityRaw>> GetEmployeeDailyActivityRawAsync(int empId, DateTime from, DateTime to)
+    {
+        var sql = @"
+            SELECT 
+                a.empid AS EmpId,
+                a.attendancedate::timestamp AS AttendanceDate,
+                a.clockin AS ClockIn,
+                a.clockout AS ClockOut,
+                a.totalhours AS TotalHours,
+                w.logid AS LogId,
+                w.taskid AS TaskId,
+                t.tasktitle AS TaskName,
+                w.hoursworked AS HoursWorked,
+                w.description AS Description
+            FROM t_attendance a
+            LEFT JOIN t_worklogs w 
+                ON a.empid = w.empid
+                AND a.attendancedate = w.workdate
+            LEFT JOIN t_projecttasks t
+                ON w.taskid = t.taskid
+            WHERE a.empid = @EmpId
+              AND a.attendancedate >= @From
+              AND a.attendancedate <= @To
+            ORDER BY a.attendancedate DESC, w.createdat DESC";
+
+        return await _db.QueryAsync<EmployeeDailyActivityRaw>(sql, new { EmpId = empId, From = from.Date, To = to.Date });
+    }
+
+    public async Task<IEnumerable<ScreenshotDto>> GetEmployeeScreenshotsAsync(int empId, DateTime from, DateTime to)
+    {
+        var sql = @"
+            SELECT 
+                screenshotid AS ScreenshotId,
+                fileurl AS FileUrl,
+                capturedat AS CapturedAt
+            FROM employee_screenshots
+            WHERE empid = @EmpId
+              AND capturedat >= @From
+              AND capturedat < @ToPlusOne
+            ORDER BY capturedat DESC";
+
+        return await _db.QueryAsync<ScreenshotDto>(sql, new { EmpId = empId, From = from.Date, ToPlusOne = to.Date.AddDays(1) });
+    }
+
+    public async Task<decimal> GetExpectedWorkingHoursAsync(int empId)
+    {
+        var sql = @"
+            SELECT COALESCE(s.workinghours, 8) 
+            FROM t_spaces s
+            INNER JOIN t_users u ON u.spaceid = s.spaceid
+            WHERE u.empid = @EmpId";
+        
+        decimal expectedHours = await _db.ExecuteScalarAsync<decimal>(sql, new { EmpId = empId });
+        return expectedHours <= 0 ? 8m : expectedHours;
+    }
 }

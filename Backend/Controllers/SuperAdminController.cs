@@ -312,4 +312,74 @@ public class SuperAdminController : ControllerBase
             return StatusCode(500, new { message = "Failed to update profile." });
         }
     }
+
+    /// <summary>
+    /// POST /api/SuperAdmin/create-superadmin — Create a new SuperAdmin account
+    /// Step 1: Verify the calling SuperAdmin's own password
+    /// Step 2: Create new SuperAdmin with provided email, name, password
+    /// </summary>
+    [HttpPost("create-superadmin")]
+    public async Task<IActionResult> CreateSuperAdmin([FromBody] CreateSuperAdminRequest request)
+    {
+        try
+        {
+            // Identify the calling SuperAdmin
+            var idClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(idClaim) || !int.TryParse(idClaim, out var callerSuperAdminId))
+                return Unauthorized(new { message = "Invalid token or unauthorized." });
+
+            var callerSuperAdmin = await _repo.GetSuperAdminByIdAsync(callerSuperAdminId);
+            if (callerSuperAdmin == null)
+                return NotFound(new { message = "Calling SuperAdmin account not found." });
+
+            // Validate request fields
+            if (string.IsNullOrWhiteSpace(request.YourPassword))
+                return BadRequest(new { message = "Your current password is required." });
+            if (string.IsNullOrWhiteSpace(request.NewEmail))
+                return BadRequest(new { message = "New SuperAdmin email is required." });
+            if (string.IsNullOrWhiteSpace(request.NewName))
+                return BadRequest(new { message = "New SuperAdmin name is required." });
+            if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 6)
+                return BadRequest(new { message = "New SuperAdmin password must be at least 6 characters." });
+
+            // Verify caller's own password
+            var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<object>();
+            var verifyResult = hasher.VerifyHashedPassword(new object(), callerSuperAdmin.PasswordHash, request.YourPassword);
+            if (verifyResult != Microsoft.AspNetCore.Identity.PasswordVerificationResult.Success &&
+                verifyResult != Microsoft.AspNetCore.Identity.PasswordVerificationResult.SuccessRehashNeeded)
+                return BadRequest(new { message = "Your password is incorrect. Cannot proceed." });
+
+            // Check new email is not already taken
+            var existing = await _repo.GetSuperAdminByEmailAsync(request.NewEmail.Trim());
+            if (existing != null)
+                return Conflict(new { message = "A SuperAdmin with this email already exists." });
+
+            // Hash new password and create
+            var newHash = hasher.HashPassword(new object(), request.NewPassword);
+            var newId = await _repo.CreateSuperAdminAsync(request.NewEmail.Trim(), request.NewName.Trim(), newHash);
+
+            Console.WriteLine($"[SuperAdmin] New SuperAdmin created: {request.NewEmail} by {callerSuperAdmin.Email}");
+            return Ok(new
+            {
+                message = $"SuperAdmin '{request.NewName}' created successfully.",
+                id = newId,
+                email = request.NewEmail.Trim(),
+                name = request.NewName.Trim()
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SuperAdmin] CreateSuperAdmin error: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to create SuperAdmin." });
+        }
+    }
 }
+
+public class CreateSuperAdminRequest
+{
+    public string YourPassword { get; set; } = string.Empty;
+    public string NewEmail { get; set; } = string.Empty;
+    public string NewName { get; set; } = string.Empty;
+    public string NewPassword { get; set; } = string.Empty;
+}
+

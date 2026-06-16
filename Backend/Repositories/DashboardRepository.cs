@@ -26,10 +26,16 @@ public class DashboardRepository : IDashboardRepository
                 COALESCE(w.hoursworked, 0) AS HoursWorked,
                 COALESCE(NULLIF(TRIM(w.description), ''), 'No description') AS Description,
                 w.workdate::timestamp AS WorkDate,
-                w.createdat AS CreatedAt
+                w.createdat AS CreatedAt,
+                a.clockin AS ClockIn,
+                a.clockout AS ClockOut,
+                a.attendancedate::timestamp AS AttendanceDate,
+                t.tasktitle AS TaskTitle
             FROM t_worklogs w
             JOIN t_users u ON u.empid = w.empid
             JOIN t_spaces s ON u.spaceid = s.spaceid
+            LEFT JOIN t_projecttasks t ON w.taskid = t.taskid
+            LEFT JOIN t_attendance a ON a.empid = w.empid AND a.attendancedate = w.workdate
             WHERE 
                 s.adminid = @AdminId
                 AND w.workdate IS NOT NULL

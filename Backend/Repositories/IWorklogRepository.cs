@@ -12,4 +12,7 @@ public interface IWorklogRepository
     Task<IEnumerable<TaskProgress>> GetTaskProgressByEmpIdAsync(int empId);
     Task<IEnumerable<WorklogChartDto>> GetWorklogsChartAsync(int empId, string range);
     Task UpdateTaskStatusFromWorklogAsync(int taskId, string status);
+    Task<IEnumerable<EmployeeDailyActivityRaw>> GetEmployeeDailyActivityRawAsync(int empId, DateTime from, DateTime to);
+    Task<IEnumerable<ScreenshotDto>> GetEmployeeScreenshotsAsync(int empId, DateTime from, DateTime to);
+    Task<decimal> GetExpectedWorkingHoursAsync(int empId);
 }

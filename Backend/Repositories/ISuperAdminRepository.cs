@@ -91,4 +91,5 @@ public interface ISuperAdminRepository
     Task<SuperAdmin?> GetSuperAdminByEmailAsync(string email);
     Task<SuperAdmin?> GetSuperAdminByIdAsync(int id);
     Task<bool> UpdateSuperAdminAsync(SuperAdmin superAdmin);
+    Task<int> CreateSuperAdminAsync(string email, string name, string passwordHash);
 }

@@ -179,4 +179,13 @@ public class SuperAdminRepository : ISuperAdminRepository
         var result = await _dbConnection.ExecuteAsync(query, superAdmin);
         return result > 0;
     }
+
+    public async Task<int> CreateSuperAdminAsync(string email, string name, string passwordHash)
+    {
+        var query = @"
+            INSERT INTO t_superadmins (email, name, passwordhash)
+            VALUES (@Email, @Name, @PasswordHash)
+            RETURNING id";
+        return await _dbConnection.ExecuteScalarAsync<int>(query, new { Email = email, Name = name, PasswordHash = passwordHash });
+    }
 }

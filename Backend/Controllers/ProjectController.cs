@@ -4,27 +4,20 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
 using System.Threading.Tasks;
-using System.Linq;
 using System;
 using Backend.Models;
-using Backend.Repositories;
+using Backend.Services;
 
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class ProjectController : ControllerBase
 {
-    private readonly IProjectRepository _projectRepository;
-    private readonly IUserRepository _userRepository;
-    private readonly ISpaceRepository _spaceRepository;
-    private readonly Backend.Services.INotificationService _notificationService;
+    private readonly IProjectService _projectService;
 
-    public ProjectController(IProjectRepository projectRepository, IUserRepository userRepository, ISpaceRepository spaceRepository, Backend.Services.INotificationService notificationService)
+    public ProjectController(IProjectService projectService)
     {
-        _projectRepository = projectRepository;
-        _userRepository = userRepository;
-        _spaceRepository = spaceRepository;
-        _notificationService = notificationService;
+        _projectService = projectService;
     }
 
     private int GetEmpId()
@@ -34,347 +27,358 @@ public class ProjectController : ControllerBase
         return int.TryParse(claim, out var id) ? id : 0;
     }
 
-    private string GetRole() => User.FindFirst(ClaimTypes.Role)?.Value ?? "";
-
-    private async Task<int?> ResolveAdminIdAsync(int empId, string role)
+    private int GetSpaceId()
     {
-        if (role == "Admin") return empId;
-
-        var user = await _userRepository.GetUserByIdAsync(empId);
-        if (user?.SpaceId != null)
-        {
-            var space = await _spaceRepository.GetSpaceByIdAsync(user.SpaceId.Value);
-            if (space?.AdminId != null)
-            {
-                return space.AdminId;
-            }
-        }
-
-        // Fallback: look for the first Admin in the system
-        var users = await _userRepository.GetAllUsersAsync();
-        var admin = users.FirstOrDefault(u => u.Role == "Admin");
-        if (admin != null) return admin.EmpId;
-
-        return null;
+        var claim = User.FindFirst("SpaceId")?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // GET /api/Project — Admin sees company projects via adminId; Manager/TL/Employee see relevant
-    // ──────────────────────────────────────────────────────────────────────
+    private string GetRole() => User.FindFirst(ClaimTypes.Role)?.Value ?? "";
+
+    // GET /api/project
     [HttpGet]
     public async Task<IActionResult> GetProjects()
     {
-        var empId = GetEmpId();
-        var role = GetRole();
-
-        if (role is "Admin")
+        try
         {
-            // Admin sees all projects linked to them via adminid
-            var projects = await _projectRepository.GetProjectsByAdminIdAsync(empId);
+            var empId = GetEmpId();
+            if (empId == 0) return Unauthorized();
+
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var projects = await _projectService.GetProjectsAsync(empId, spaceId, role);
             return Ok(projects);
         }
-
-        if (role is "Manager")
+        catch (UnauthorizedAccessException ex)
         {
-            // Manager sees all projects (readonly) — try via adminId lookup
-            var user = await _userRepository.GetUserByIdAsync(empId);
-            if (user?.SpaceId != null)
-            {
-                var space = await _spaceRepository.GetSpaceByIdAsync(user.SpaceId.Value);
-                if (space?.AdminId != null)
-                {
-                    var projects = await _projectRepository.GetProjectsByAdminIdAsync(space.AdminId.Value);
-                    return Ok(projects);
-                }
-            }
-            var all = await _projectRepository.GetAllProjectsAsync();
-            return Ok(all);
+            return StatusCode(403, new { message = ex.Message });
         }
-
-        if (empId == 0) return Unauthorized();
-        var empProjects = await _projectRepository.GetProjectsByEmpIdAsync(empId);
-        return Ok(empProjects);
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch projects.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // GET /api/Project/my — Projects created by the logged-in TeamLead
-    // ──────────────────────────────────────────────────────────────────────
+    // GET /api/project/my
     [HttpGet("my")]
-    [Authorize(Roles = "Admin,TeamLead")]
     public async Task<IActionResult> GetMyProjects()
     {
-        var empId = GetEmpId();
-        if (empId == 0) return Unauthorized("EmpId missing in token");
+        try
+        {
+            var empId = GetEmpId();
+            if (empId == 0) return Unauthorized();
 
-        var projects = await _projectRepository.GetProjectsByCreator(empId);
-        return Ok(projects);
+            var projects = await _projectService.GetMyProjectsAsync(empId);
+            return Ok(projects);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch your projects.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // GET /api/Project/{id}
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpGet("{id}")]
+    // GET /api/project/{id}
+    [HttpGet("{id:int}")]
     public async Task<IActionResult> GetProjectById(int id)
     {
-        var project = await _projectRepository.GetProjectByIdAsync(id);
-        if (project == null) return NotFound();
-        return Ok(project);
+        try
+        {
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var project = await _projectService.GetProjectByIdAsync(id, spaceId, role);
+            if (project == null) return NotFound(new { message = "Project not found." });
+            return Ok(project);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch project.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // POST /api/Project — Create project (auto-links adminId via space)
-    // ──────────────────────────────────────────────────────────────────────
+    // POST /api/project
     [HttpPost]
     [Authorize(Roles = "Admin,TeamLead")]
     public async Task<IActionResult> CreateProject([FromBody] Project project)
     {
-        var empId = GetEmpId();
-        project.CreatedById = empId;
+        try
+        {
+            var empId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
 
-        // Resolve adminId and spaceId
-        var user = await _userRepository.GetUserByIdAsync(empId);
-        project.SpaceId = user?.SpaceId;
-        project.AdminId = await ResolveAdminIdAsync(empId, GetRole());
+            if (project == null) return BadRequest("Project details are required.");
 
-        var projectId = await _projectRepository.CreateProjectAsync(project);
-        return CreatedAtAction(nameof(GetProjectById), new { id = projectId }, new { projectId, project.ProjectName });
+            var projectId = await _projectService.CreateProjectAsync(project, empId, spaceId, role);
+            project.ProjectId = projectId;
+            return CreatedAtAction(nameof(GetProjectById), new { id = projectId }, project);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to create project.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // POST /api/Project/create-with-tasks — Create project + tasks in one call
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpPost("create-with-tasks")]
+    // POST /api/project/with-tasks
+    [HttpPost("with-tasks")]
     [Authorize(Roles = "Admin,TeamLead")]
     public async Task<IActionResult> CreateProjectWithTasks([FromBody] CreateProjectWithTasksDto dto)
     {
-        var empId = GetEmpId();
-        if (empId == 0) return Unauthorized();
-
-        if (string.IsNullOrWhiteSpace(dto.ProjectName))
-            return BadRequest(new { message = "Project name is required." });
-
-        // Resolve adminId and spaceId
-        var user = await _userRepository.GetUserByIdAsync(empId);
-        var role = GetRole();
-        var adminId = await ResolveAdminIdAsync(empId, role);
-
-        var projectId = await _projectRepository.CreateProjectAsync(new Project
+        try
         {
-            ProjectName = dto.ProjectName,
-            Description = dto.Description,
-            Links = dto.Links,
-            DocumentationLinks = dto.DocumentationLinks,
-            StartDate = dto.StartDate,
-            EndDate = dto.EndDate,
-            TeamId = dto.TeamId,
-            CreatedById = empId,
-            AdminId = adminId,
-            SpaceId = user?.SpaceId,
-        });
+            var empId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
 
-        var createdTasks = new List<object>();
-        foreach (var t in dto.Tasks)
-        {
-            var taskId = await _projectRepository.CreateTaskAsync(new ProjectTask
-            {
-                ProjectId = projectId,
-                AssignedToEmpId = t.AssignedToEmpId,
-                TaskTitle = t.TaskTitle,
-                TaskDescription = t.TaskDescription ?? "",
-                TaskStatus = "Pending",
-                Priority = t.Priority ?? "Medium",
-                StartDate = t.StartDate,
-                DueDate = t.DueDate,
-                WorkingHours = t.WorkingHours ?? 8,
-            });
-            createdTasks.Add(new { taskId, t.TaskTitle, t.AssignedToEmpId });
+            if (dto == null) return BadRequest("Project and task data is required.");
+
+            var projectId = await _projectService.CreateProjectWithTasksAsync(dto, empId, spaceId, role);
+            return Ok(new { message = "Project and tasks created successfully.", projectId });
         }
-
-        Console.WriteLine($"[create-with-tasks] Project #{projectId} created with {createdTasks.Count} tasks by EmpId={empId}, AdminId={adminId}");
-
-        return Ok(new { projectId, projectName = dto.ProjectName, tasksCreated = createdTasks.Count, tasks = createdTasks });
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to create project with tasks.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // PUT /api/Project/{id}
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpPut("{id}")]
+    // PUT /api/project/{id}
+    [HttpPut("{id:int}")]
     [Authorize(Roles = "Admin,TeamLead")]
     public async Task<IActionResult> UpdateProject(int id, [FromBody] Project project)
     {
-        var empId = GetEmpId();
-        var role = GetRole();
-
-        var existing = await _projectRepository.GetProjectByIdAsync(id);
-        if (existing == null) return NotFound(new { message = "Project not found." });
-
-        var callerAdminId = await ResolveAdminIdAsync(empId, role);
-        if (existing.AdminId != callerAdminId)
+        try
         {
-            return Forbid();
+            var empId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            if (project == null) return BadRequest("Project details are required.");
+
+            var success = await _projectService.UpdateProjectAsync(id, project, empId, spaceId, role);
+            if (!success) return NotFound(new { message = "Project not found." });
+
+            return Ok(new { message = "Project updated successfully." });
         }
-
-        project.ProjectId = id;
-        project.CreatedById = existing.CreatedById;
-        project.AdminId = existing.AdminId;
-        if (!project.SpaceId.HasValue) project.SpaceId = existing.SpaceId;
-
-        var success = await _projectRepository.UpdateProjectAsync(project);
-        if (!success) return NotFound();
-        return Ok(new { message = "Project updated successfully.", project });
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to update project.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // DELETE /api/Project/{id}
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpDelete("{id}")]
-    [Authorize(Roles = "Admin,TeamLead")]
+    // DELETE /api/project/{id}
+    [HttpDelete("{id:int}")]
+    [Authorize(Roles = "Admin")]
     public async Task<IActionResult> DeleteProject(int id)
     {
-        var success = await _projectRepository.DeleteProjectAsync(id);
-        if (!success) return NotFound();
-        return Ok(new { message = "Project deleted" });
+        try
+        {
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var success = await _projectService.DeleteProjectAsync(id, spaceId, role);
+            if (!success) return NotFound(new { message = "Project not found." });
+
+            return Ok(new { message = "Project deleted successfully." });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to delete project.", details = ex.Message });
+        }
     }
 
-    [HttpGet("{id}/tasks")]
+    // GET /api/project/{id}/tasks
+    [HttpGet("{id:int}/tasks")]
     public async Task<IActionResult> GetProjectTasks(int id)
     {
-        var empId = GetEmpId();
-        var role = GetRole();
-        var tasks = await _projectRepository.GetTasksByProjectIdAsync(id);
-
-        if (role is not ("Admin" or "TeamLead" or "Manager"))
+        try
         {
-            // Employees only see tasks assigned to themselves
-            tasks = tasks.Where(t => t.AssignedToEmpId == empId);
+            var empId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var tasks = await _projectService.GetProjectTasksAsync(id, empId, spaceId, role);
+            return Ok(tasks);
         }
-        return Ok(tasks);
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch project tasks.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // POST /api/Project/tasks — Assign a single task
-    // ──────────────────────────────────────────────────────────────────────
+    // POST /api/project/tasks
     [HttpPost("tasks")]
     [Authorize(Roles = "Admin,TeamLead")]
     public async Task<IActionResult> CreateTask([FromBody] ProjectTask task)
     {
-        if (string.IsNullOrWhiteSpace(task.TaskStatus)) task.TaskStatus = "Pending";
-        if (string.IsNullOrWhiteSpace(task.Priority)) task.Priority = "Medium";
-        var taskId = await _projectRepository.CreateTaskAsync(task);
-        return Ok(new { TaskId = taskId });
+        try
+        {
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            if (task == null) return BadRequest("Task details are required.");
+
+            var taskId = await _projectService.CreateTaskAsync(task, spaceId, role);
+            task.TaskId = taskId;
+            return Ok(new { message = "Task created successfully.", taskId });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to create task.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // PUT /api/Project/tasks/{taskId}
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpPut("tasks/{taskId}")]
+    // PUT /api/project/tasks/{taskId}
+    [HttpPut("tasks/{taskId:int}")]
     [Authorize(Roles = "Admin,TeamLead")]
     public async Task<IActionResult> UpdateTask(int taskId, [FromBody] ProjectTask task)
     {
-        task.TaskId = taskId;
-        var success = await _projectRepository.UpdateTaskAsync(task);
-        if (!success) return NotFound();
-        return Ok(new { message = "Task updated" });
-    }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // PATCH /api/Project/tasks/{taskId}/status
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpPatch("tasks/{taskId}/status")]
-    public async Task<IActionResult> UpdateTaskStatus(int taskId, [FromBody] UpdateStatusRequest req)
-    {
-        var empId = GetEmpId();
-        var role = GetRole();
-
-        // Employees can update their own task status
-        if (role is not ("Admin" or "TeamLead" or "Manager"))
+        try
         {
-            var empTasks = await _projectRepository.GetTasksByEmployeeIdAsync(empId);
-            if (!empTasks.Any(t => t.TaskId == taskId))
-                return Forbid();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            if (task == null) return BadRequest("Task details are required.");
+
+            var success = await _projectService.UpdateTaskAsync(taskId, task, spaceId, role);
+            if (!success) return NotFound(new { message = "Task not found." });
+
+            return Ok(new { message = "Task updated successfully." });
         }
-
-        var success = await _projectRepository.UpdateTaskStatusAsync(taskId, req.Status);
-        if (!success) return NotFound();
-
-        if (req.Status == "Completed" || req.Status == "Complete" || req.Status == "Resolve")
+        catch (UnauthorizedAccessException ex)
         {
-            try
-            {
-                var user = await _userRepository.GetUserByIdAsync(empId);
-                if (user != null)
-                {
-                    var allEmpTasks = await _projectRepository.GetTasksByEmployeeIdAsync(empId);
-                    var task = allEmpTasks.FirstOrDefault(t => t.TaskId == taskId);
-                    var taskTitle = task?.TaskTitle ?? $"Task #{taskId}";
-                    
-                    await _notificationService.NotifyTaskCompletedAsync(empId, user.Email ?? "", user.SpaceId ?? 0, taskId, taskTitle);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Notification Trigger Error] Task Completed: {ex.Message}");
-            }
+            return StatusCode(403, new { message = ex.Message });
         }
-
-        return Ok(new { message = "Status updated" });
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to update task.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // GET /api/Project/employee/{empid}/tasks
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpGet("employee/{empid}/tasks")]
-    public async Task<IActionResult> GetEmployeeTasks(int empid)
+    // PUT /api/project/tasks/status/{taskId}
+    [HttpPut("tasks/status/{taskId:int}")]
+    public async Task<IActionResult> UpdateTaskStatus(int taskId, [FromBody] UpdateTaskStatusRequest req)
     {
-        var callerEmpId = GetEmpId();
-        var role = GetRole();
+        try
+        {
+            var empId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
 
-        if (role is not ("Admin" or "Manager" or "TeamLead") && callerEmpId != empid)
-            return Forbid();
+            if (req == null || string.IsNullOrWhiteSpace(req.Status))
+                return BadRequest("Task status is required.");
 
-        var tasks = await _projectRepository.GetTasksByEmployeeIdAsync(empid);
-        return Ok(tasks);
+            var success = await _projectService.UpdateTaskStatusAsync(taskId, req.Status, empId, spaceId, role);
+            if (!success) return NotFound(new { message = "Task not found." });
+
+            return Ok(new { message = "Task status updated successfully." });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to update task status.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // GET /api/Project/my-tasks — Tasks assigned TO the logged-in user
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpGet("my-tasks")]
+    // GET /api/project/tasks/employee/{empId}
+    [HttpGet("tasks/employee/{empId:int}")]
+    [Authorize(Roles = "Admin,Manager,TeamLead")]
+    public async Task<IActionResult> GetEmployeeTasks(int empId)
+    {
+        try
+        {
+            var callerEmpId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var tasks = await _projectService.GetEmployeeTasksAsync(empId, callerEmpId, spaceId, role);
+            return Ok(tasks);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch employee tasks.", details = ex.Message });
+        }
+    }
+
+    // GET /api/project/tasks/my
+    [HttpGet("tasks/my")]
     public async Task<IActionResult> GetMyTasks()
     {
-        var empId = GetEmpId();
-        Console.WriteLine($"[my-tasks] Logged in EmpId: {empId}");
+        try
+        {
+            var empId = GetEmpId();
+            if (empId == 0) return Unauthorized();
 
-        if (empId == 0) return Unauthorized();
-
-        var tasks = await _projectRepository.GetTasksByEmployeeIdAsync(empId);
-        Console.WriteLine($"[my-tasks] Tasks Count: {tasks.Count()}");
-
-        return Ok(tasks);
+            var tasks = await _projectService.GetMyTasksAsync(empId);
+            return Ok(tasks);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch your tasks.", details = ex.Message });
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // GET /api/Project/all-assigned-tasks?search= — Tasks from projects created by TL
-    // ──────────────────────────────────────────────────────────────────────
-    [HttpGet("all-assigned-tasks")]
+    // GET /api/project/tasks/assigned
+    [HttpGet("tasks/assigned")]
     [Authorize(Roles = "Admin,TeamLead")]
-    public async Task<IActionResult> GetAllAssignedTasks([FromQuery] string? search)
+    public async Task<IActionResult> GetAllAssignedTasks([FromQuery] string? search = null)
     {
-        var empId = GetEmpId();
-        if (empId == 0) return Unauthorized();
-
-        IEnumerable<ProjectTask> tasks;
-
-        if (!string.IsNullOrWhiteSpace(search))
+        try
         {
-            tasks = await _projectRepository.SearchTasksByCreatorAsync(empId, search.Trim());
-        }
-        else
-        {
-            tasks = await _projectRepository.GetTasksByCreatorAsync(empId);
-        }
+            var empId = GetEmpId();
+            var spaceId = GetSpaceId();
+            var role = GetRole();
 
-        Console.WriteLine($"[all-assigned-tasks] EmpId={empId}, Search='{search}', Count={tasks.Count()}");
-        return Ok(tasks);
+            var tasks = await _projectService.GetAllAssignedTasksAsync(empId, search, spaceId, role);
+            return Ok(tasks);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch assigned tasks.", details = ex.Message });
+        }
     }
+}
+
+public class UpdateTaskStatusRequest
+{
+    public string Status { get; set; } = string.Empty;
 }

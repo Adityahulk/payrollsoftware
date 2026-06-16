@@ -3,209 +3,148 @@ namespace Backend.Controllers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using System.Threading.Tasks;
-using System.Linq;
 using System;
-using Backend.Models;
-using Backend.Repositories;
+using Backend.Services;
+using System.Security.Claims;
 
 [ApiController]
 [Route("api/[controller]")]
 public class AttendanceController : ControllerBase
 {
-    private readonly IAttendanceRepository _attendanceRepository;
-    private readonly IUserRepository _userRepository;
-    private readonly Backend.Services.INotificationService _notificationService;
+    private readonly IAttendanceService _attendanceService;
 
-    public AttendanceController(IAttendanceRepository attendanceRepository, IUserRepository userRepository, Backend.Services.INotificationService notificationService)
+    public AttendanceController(IAttendanceService attendanceService)
     {
-        _attendanceRepository = attendanceRepository;
-        _userRepository = userRepository;
-        _notificationService = notificationService;
+        _attendanceService = attendanceService;
     }
+
+    private int GetEmpId()
+    {
+        var claim = User.FindFirst("EmpId")?.Value
+                 ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
+    }
+
+    private int GetSpaceId()
+    {
+        var claim = User.FindFirst("SpaceId")?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
+    }
+
+    private string GetRole() => User.FindFirst(ClaimTypes.Role)?.Value ?? "";
 
     [HttpGet("me")]
     [Authorize]
     public async Task<IActionResult> GetMyAttendance()
     {
-        var empIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-                         ?? User.FindFirst("nameid")?.Value;
+        var empId = GetEmpId();
+        if (empId == 0) return Unauthorized(new { message = "Invalid session token." });
 
-        int empId = 0;
-        bool hasEmpId = int.TryParse(empIdClaim, out empId);
-        if (!hasEmpId && !string.IsNullOrEmpty(empIdClaim))
-        {
-            var userByEmail = await _userRepository.GetUserByEmailAsync(empIdClaim);
-            if (userByEmail != null)
-            {
-                empId = userByEmail.EmpId;
-                hasEmpId = true;
-            }
-        }
-
-        if (hasEmpId)
-        {
-            var attendance = await _attendanceRepository.GetAttendanceByUserIdAsync(empId);
-            var dateOfJoining = await _attendanceRepository.GetDateOfJoiningAsync(empId);
-            var workingDays = await _attendanceRepository.GetWorkingDaysByEmpIdAsync(empId);
-            return Ok(new { attendance, dateOfJoining, workingDays });
-        }
-
-        return Unauthorized(new { message = "Invalid user session claims" });
+        var data = await _attendanceService.GetMyAttendanceAsync(empId);
+        return Ok(data);
     }
 
     [HttpPost("clock-in")]
     [Authorize]
     public async Task<IActionResult> ClockIn()
     {
-        Console.WriteLine("Claims:");
-        foreach (var claim in User.Claims)
-        {
-            Console.WriteLine($"{claim.Type} : {claim.Value}");
-        }
+        var empId = GetEmpId();
+        if (empId == 0) return Unauthorized(new { message = "Invalid session token." });
 
-        var empIdClaim = User.FindFirst("EmpId")?.Value;
-
-        if (string.IsNullOrEmpty(empIdClaim))
-        {
-            Console.WriteLine("EmpId missing in token");
-            return Unauthorized(new { message = "Invalid token or missing EmpId" });
-        }
-
-        if (!int.TryParse(empIdClaim, out int empId))
-            return BadRequest(new { message = "Invalid EmpId format in token" });
-
-        var result = await _attendanceRepository.ClockInAsync(empId);
-
-        if (!result)
-            return BadRequest(new { message = "Already clocked in today" });
+        var ipAddress = Request.HttpContext.Connection.RemoteIpAddress?.ToString();
 
         try
         {
-            var user = await _userRepository.GetUserByIdAsync(empId);
-            if (user != null)
+            var result = await _attendanceService.ClockInAsync(empId, ipAddress);
+            if (!result)
             {
-                await _notificationService.NotifyClockInAsync(empId, user.Email, user.SpaceId ?? 0, DateTime.UtcNow);
+                return BadRequest(new { message = "Already clocked in today" });
             }
+            return Ok(new { message = "Clock-in successful" });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Notification Trigger Error] Clock-in: {ex.Message}");
+            return BadRequest(new { message = ex.Message });
         }
-
-        return Ok(new { message = "Clock-in successful" });
     }
 
     [HttpPost("clock-out")]
     [Authorize]
     public async Task<IActionResult> ClockOut()
     {
-        var empIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-                         ?? User.FindFirst("nameid")?.Value;
+        var empId = GetEmpId();
+        if (empId == 0) return Unauthorized(new { message = "Invalid session token." });
 
-        int empId = 0;
-        bool hasEmpId = int.TryParse(empIdClaim, out empId);
-        if (!hasEmpId && !string.IsNullOrEmpty(empIdClaim))
+        try
         {
-            var userByEmail = await _userRepository.GetUserByEmailAsync(empIdClaim);
-            if (userByEmail != null)
-            {
-                empId = userByEmail.EmpId;
-                hasEmpId = true;
-            }
+            var data = await _attendanceService.ClockOutAsync(empId);
+            return Ok(data);
         }
-
-        if (!hasEmpId) return Unauthorized(new { message = "Invalid user session claims" });
-
-        var records = await _attendanceRepository.GetAttendanceByUserIdAsync(empId);
-        var activeRecord = records.FirstOrDefault(r => r.ClockIn.HasValue && !r.ClockOut.HasValue);
-        
-        if (activeRecord == null)
+        catch (InvalidOperationException ex)
         {
-            return BadRequest(new { message = "You have not clocked in yet or you already clocked out today!" });
+            return BadRequest(new { message = ex.Message });
         }
-
-        var clockOutTime = DateTime.Now;
-        var clockInTime = activeRecord.ClockIn.Value;
-        decimal totalHours = (decimal)(clockOutTime - clockInTime).TotalHours;
-
-        var times = await _attendanceRepository.GetSpaceWorkTimesAsync(empId);
-        int earlyExitMinutes = 0;
-
-        // Check if today is a working day - suppress early exit penalty on off-days
-        var workingDays = await _attendanceRepository.GetWorkingDaysByEmpIdAsync(empId);
-        string todayName = Backend.Models.Space.DayOfWeekToShortName(DateTime.Now.DayOfWeek);
-        bool isWorkingDay = workingDays.Contains(todayName, StringComparer.OrdinalIgnoreCase);
-        
-        if (isWorkingDay && times.EndTime.HasValue)
+        catch (Exception ex)
         {
-            var standardExitTime = clockOutTime.Date.Add(times.EndTime.Value);
-            if (clockOutTime < standardExitTime)
-            {
-                earlyExitMinutes = (int)(standardExitTime - clockOutTime).TotalMinutes;
-            }
+            return StatusCode(500, new { message = ex.Message });
         }
-
-        if (isWorkingDay && times.WorkingHours.HasValue)
-        {
-            int shortfall = (int)((times.WorkingHours.Value - (double)totalHours) * 60);
-            if (shortfall > earlyExitMinutes)
-            {
-                earlyExitMinutes = shortfall;
-            }
-        }
-
-        var success = await _attendanceRepository.ClockOutAsync(activeRecord.AttendanceId, clockOutTime, totalHours, earlyExitMinutes);
-        if (!success) return StatusCode(500, new { message = "Failed to update clock-out records in database." });
-
-        return Ok(new { Message = "Clocked out successfully!", TotalHours = totalHours, EarlyExitMinutes = earlyExitMinutes, ClockOut = clockOutTime });
     }
 
     [HttpGet("user/{empid}")]
+    [Authorize(Roles = "Admin,Manager,TeamLead")]
     public async Task<IActionResult> GetAttendanceByUserId(int empid)
     {
-        var attendance = await _attendanceRepository.GetAttendanceByUserIdAsync(empid);
-        var workingDays = await _attendanceRepository.GetWorkingDaysByEmpIdAsync(empid);
-        return Ok(new { attendance, workingDays });
+        var spaceId = GetSpaceId();
+        var role = GetRole();
+
+        try
+        {
+            var attendance = await _attendanceService.GetAttendanceByUserIdAsync(empid, spaceId, role);
+            return Ok(new { attendance });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
     }
 
     [HttpGet]
     [Authorize]
     public async Task<IActionResult> GetAllAttendance()
     {
+        var empId = GetEmpId();
+        var spaceId = GetSpaceId();
+        var role = GetRole();
+
         try
         {
-            var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
-                       ?? User.FindFirst("role")?.Value;
-            var empIdClaim = User.FindFirst("EmpId")?.Value 
-                             ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            int.TryParse(empIdClaim, out int empId);
-
             if (role == "Admin")
             {
-                var attendance = await _attendanceRepository.GetAllAttendanceAsync();
+                var attendance = await _attendanceService.GetAttendanceBySpaceIdAsync(spaceId, spaceId, role);
                 return Ok(attendance);
             }
             else if (role == "Manager" || role == "TeamLead")
             {
-                var spaceIdClaim = User.FindFirst("SpaceId")?.Value;
-                if (int.TryParse(spaceIdClaim, out int spaceId))
-                {
-                    // Optimized: DB-level space filter instead of fetching all and filtering in C#
-                    var filteredAttendance = await _attendanceRepository.GetAttendanceBySpaceIdAsync(spaceId, 500);
-                    return Ok(filteredAttendance);
-                }
-                return Forbid();
+                var attendance = await _attendanceService.GetAttendanceBySpaceIdAsync(spaceId, spaceId, role);
+                return Ok(attendance);
             }
             else
             {
-                var attendance = await _attendanceRepository.GetAttendanceByUserIdAsync(empId);
+                var attendance = await _attendanceService.GetAttendanceByUserIdAsync(empId, spaceId, role);
                 return Ok(attendance);
             }
         }
-        catch (System.Exception ex)
+        catch (UnauthorizedAccessException)
         {
-            Console.WriteLine($"[AttendanceController.GetAllAttendance] Error: {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch attendance data" });
+            return StatusCode(403, new { message = "Access denied." });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = ex.Message });
         }
     }
 
@@ -213,30 +152,21 @@ public class AttendanceController : ControllerBase
     [Authorize]
     public async Task<IActionResult> StartBreak()
     {
-        var empIdClaim = User.FindFirst("EmpId")?.Value;
-        if (string.IsNullOrEmpty(empIdClaim))
-            return Unauthorized(new { message = "Invalid token or missing EmpId" });
-
-        if (!int.TryParse(empIdClaim, out int empId))
-            return BadRequest(new { message = "Invalid EmpId format" });
+        var empId = GetEmpId();
+        if (empId == 0) return Unauthorized();
 
         try
         {
-            var result = await _attendanceRepository.StartBreakAsync(empId);
-
+            var result = await _attendanceService.StartBreakAsync(empId);
             if (!result)
-                return BadRequest(new { message = "Break already started or 60-minute daily limit reached" });
-
+            {
+                return BadRequest(new { message = "Break already started or limit reached" });
+            }
             return Ok(new { message = "Break started successfully" });
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex)
         {
             return BadRequest(new { message = ex.Message });
-        }
-        catch (System.Exception ex)
-        {
-            Console.WriteLine($"[StartBreak Error] {ex.Message}");
-            return StatusCode(500, new { message = "Failed to start break due to an internal server error." });
         }
     }
 
@@ -244,23 +174,19 @@ public class AttendanceController : ControllerBase
     [Authorize]
     public async Task<IActionResult> EndBreak()
     {
-        var empIdClaim = User.FindFirst("EmpId")?.Value;
-        if (string.IsNullOrEmpty(empIdClaim))
-            return Unauthorized(new { message = "Invalid token or missing EmpId" });
-
-        if (!int.TryParse(empIdClaim, out int empId))
-            return BadRequest(new { message = "Invalid EmpId format" });
+        var empId = GetEmpId();
+        if (empId == 0) return Unauthorized();
 
         try
         {
-            var result = await _attendanceRepository.EndBreakAsync(empId);
-
+            var result = await _attendanceService.EndBreakAsync(empId);
             if (!result)
+            {
                 return BadRequest(new { message = "No active break found to end" });
-
+            }
             return Ok(new { message = "Break ended successfully" });
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex)
         {
             return BadRequest(new { message = ex.Message });
         }
@@ -270,42 +196,19 @@ public class AttendanceController : ControllerBase
     [Authorize]
     public async Task<IActionResult> GetActiveBreak()
     {
-        var empIdClaim = User.FindFirst("EmpId")?.Value;
-        if (string.IsNullOrEmpty(empIdClaim))
-            return Unauthorized(new { message = "Invalid token or missing EmpId" });
+        var empId = GetEmpId();
+        if (empId == 0) return Unauthorized();
 
-        if (!int.TryParse(empIdClaim, out int empId))
-            return BadRequest(new { message = "Invalid EmpId format" });
-
-        try
-        {
-            var breakStart = await _attendanceRepository.GetActiveBreakStartAsync(empId);
-
-            if (breakStart.HasValue)
-            {
-                return Ok(new { isOnBreak = true, breakStart = breakStart.Value });
-            }
-            else
-            {
-                return Ok(new { isOnBreak = false });
-            }
-        }
-        catch (System.Exception ex)
-        {
-            Console.WriteLine($"[GetActiveBreak Error] {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch active break due to an internal server error." });
-        }
+        var data = await _attendanceService.GetActiveBreakAsync(empId);
+        return Ok(data);
     }
 
     [HttpDelete("test-clear")]
     [Authorize]
     public async Task<IActionResult> TestClearToday()
     {
-        var empIdClaim = User.FindFirst("EmpId")?.Value;
-        if (int.TryParse(empIdClaim, out int empId))
-        {
-            await _attendanceRepository.TestClearTodayAsync(empId);
-        }
+        var empId = GetEmpId();
+        await _attendanceService.TestClearTodayAsync(empId);
         return Ok(new { message = "Today's attendance cleared." });
     }
 
@@ -314,30 +217,7 @@ public class AttendanceController : ControllerBase
     public async Task<IActionResult> GetTrends([FromQuery] int? empId)
     {
         int targetEmpId = empId ?? 1;
-        try
-        {
-            var data = await _attendanceRepository.GetTrendsAsync(targetEmpId);
-            return Ok(data);
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = ex.Message, stackTrace = ex.StackTrace, inner = ex.InnerException?.Message });
-        }
-    }
-
-    [HttpGet("test-users")]
-    [AllowAnonymous]
-    public async Task<IActionResult> GetTestUsers()
-    {
-        try
-        {
-            var users = await _userRepository.GetAllUsersAsync();
-            return Ok(users.Select(u => new { u.EmpId, u.Email, u.Role }));
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, ex.ToString());
-        }
+        var data = await _attendanceService.GetTrendsAsync(targetEmpId);
+        return Ok(data);
     }
 }
-

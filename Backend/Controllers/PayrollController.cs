@@ -1,20 +1,30 @@
 namespace Backend.Controllers;
+
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
 using System.Threading.Tasks;
-using Backend.Repositories;
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using Backend.Services;
+using Backend.Models;
+using Dapper;
 
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class PayrollController : ControllerBase
 {
-    private readonly ISalaryRepository _salaryRepo;
+    private readonly ISalaryService _salaryService;
+    private readonly IExcelService _excelService;
+    private readonly System.Data.IDbConnection _db;
 
-    public PayrollController(ISalaryRepository salaryRepo)
+    public PayrollController(ISalaryService salaryService, IExcelService excelService, System.Data.IDbConnection db)
     {
-        _salaryRepo = salaryRepo;
+        _salaryService = salaryService;
+        _excelService = excelService;
+        _db = db;
     }
 
     private int GetEmpId()
@@ -23,6 +33,14 @@ public class PayrollController : ControllerBase
                  ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         return int.TryParse(claim, out var id) ? id : 0;
     }
+
+    private int GetSpaceId()
+    {
+        var claim = User.FindFirst("SpaceId")?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
+    }
+
+    private string GetRole() => User.FindFirst(ClaimTypes.Role)?.Value ?? "";
 
     // GET /api/payroll/history — real payment records from t_payrollpayments
     [HttpGet("history")]
@@ -33,12 +51,19 @@ public class PayrollController : ControllerBase
             var empId = GetEmpId();
             if (empId == 0) return Unauthorized(new { message = "Invalid token." });
 
-            var payments = await _salaryRepo.GetPaymentHistoryAsync(empId, limit);
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var payments = await _salaryService.GetPaymentHistoryAsync(empId, limit, spaceId, role);
             return Ok(payments);
         }
-        catch (System.Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            System.Console.WriteLine($"[PayrollController] Error in GetPaymentHistory: {ex.Message}\n{ex.StackTrace}");
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PayrollController] Error in GetPaymentHistory: {ex.Message}\n{ex.StackTrace}");
             return StatusCode(500, new { message = "An error occurred while retrieving payment history.", error = ex.Message });
         }
     }
@@ -54,17 +79,24 @@ public class PayrollController : ControllerBase
 
             if (year == 0) year = DateTime.UtcNow.Year;
 
-            var summary = await _salaryRepo.GetCtcSummaryAsync(empId, year);
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var summary = await _salaryService.GetCtcSummaryAsync(empId, year, spaceId, role);
             return Ok(summary);
         }
-        catch (System.Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            System.Console.WriteLine($"[PayrollController] Error in GetCtcSummary: {ex.Message}\n{ex.StackTrace}");
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PayrollController] Error in GetCtcSummary: {ex.Message}\n{ex.StackTrace}");
             return StatusCode(500, new { message = "An error occurred while retrieving CTC summary.", error = ex.Message });
         }
     }
 
-    // GET /api/payroll/myslips — employee's own payslips with admin-configured breakdown from t_payslips
+    // GET /api/payroll/myslips — employee's own payslips from t_payslips
     [HttpGet("myslips")]
     public async Task<IActionResult> GetMyPayslips([FromQuery] int limit = 24)
     {
@@ -73,12 +105,19 @@ public class PayrollController : ControllerBase
             var empId = GetEmpId();
             if (empId == 0) return Unauthorized(new { message = "Invalid token." });
 
-            var slips = await _salaryRepo.GetMyPayslipsAsync(empId, limit);
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var slips = await _salaryService.GetMyPayslipsAsync(empId, limit, spaceId, role);
             return Ok(slips);
         }
-        catch (System.Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            System.Console.WriteLine($"[PayrollController] Error in GetMyPayslips: {ex.Message}\n{ex.StackTrace}");
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PayrollController] Error in GetMyPayslips: {ex.Message}\n{ex.StackTrace}");
             return StatusCode(500, new { message = "An error occurred while retrieving payslips.", error = ex.Message });
         }
     }
@@ -93,12 +132,15 @@ public class PayrollController : ControllerBase
             if (month == 0) month = DateTime.UtcNow.Month;
             if (year == 0) year = DateTime.UtcNow.Year;
 
-            var salary = await _salaryRepo.GetSalaryAsync(empId, month, year);
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var salary = await _salaryService.GetSalaryAsync(empId, month, year, spaceId, role);
             if (salary == null) return NotFound(new { message = "Salary structure not found." });
 
-            var history = await _salaryRepo.GetPaymentHistoryAsync(empId, limit: 12);
-            var slips = await _salaryRepo.GetMyPayslipsAsync(empId, limit: 24);
-            var report = await _salaryRepo.GetProgressReportAsync(empId);
+            var history = await _salaryService.GetPaymentHistoryAsync(empId, limit: 12, spaceId, role);
+            var slips = await _salaryService.GetMyPayslipsAsync(empId, limit: 24, spaceId, role);
+            var report = await _salaryService.GetProgressReportAsync(empId, spaceId, role);
 
             // Fetch dynamic attendance records to extract work impact stats
             var totalWorkingDays = DateTime.DaysInMonth(year, month); // fallback / simple count
@@ -147,9 +189,13 @@ public class PayrollController : ControllerBase
                 }
             });
         }
-        catch (System.Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            System.Console.WriteLine($"[PayrollController] Error in GetFullPayrollDetails: {ex.Message}");
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PayrollController] Error in GetFullPayrollDetails: {ex.Message}");
             return StatusCode(500, new { message = "An error occurred while fetching full payroll details." });
         }
     }
@@ -169,73 +215,167 @@ public class PayrollController : ControllerBase
                 return BadRequest(new { message = "Invalid month or year." });
             }
 
-            var users = await _salaryRepo.GetCompanyUsersForPayrollAsync(adminEmpId);
-            int successCount = 0;
-
-            foreach (var user in users.Where(u => u.Role != "Admin" && u.Status == "Active"))
-            {
-                var salaryResponse = await _salaryRepo.GetSalaryAsync(user.EmpId, request.Month, request.Year);
-                if (salaryResponse == null) continue;
-
-                bool alreadyPaid = await _salaryRepo.CheckIfAlreadyPaidAsync(user.EmpId, request.Month, request.Year);
-                if (alreadyPaid) continue;
-
-                var finalAmountToPay = salaryResponse.Net;
-                var basicVal = salaryResponse.Basic;
-
-                var allowancesList = salaryResponse.Allowances.Select(a => new { name = a.Name, type = a.Type, value = a.Value, amount = a.Amount }).ToList();
-                var deductionsList = salaryResponse.Deductions.Where(d => d.DeductionType == "Standard").Select(d => new { name = d.Name, type = d.Type, value = d.Value, amount = d.Amount }).ToList();
-                var penaltiesList = salaryResponse.Deductions.Where(d => d.DeductionType != "Standard").Select(d => new { name = d.Name, type = d.Type, value = d.Value, amount = d.Amount, deductionType = d.DeductionType }).ToList();
-
-                var breakdownObj = new
-                {
-                    basic = basicVal,
-                    hra = salaryResponse.Hra,
-                    da = salaryResponse.Da,
-                    allowances = allowancesList,
-                    deductions = deductionsList,
-                    penalties = penaltiesList,
-                    finalAmount = finalAmountToPay
-                };
-
-                string breakdownJson = System.Text.Json.JsonSerializer.Serialize(breakdownObj);
-
-                var paymentId = await _salaryRepo.CreatePayrollPaymentDirectAsync(
-                    user.EmpId,
-                    user.SpaceId ?? 0,
-                    basicVal + salaryResponse.Hra + salaryResponse.Da,
-                    salaryResponse.Deductions.Sum(d => d.Amount),
-                    finalAmountToPay,
-                    salaryResponse.Allowances.Sum(a => a.Amount),
-                    "Direct Transfer",
-                    $"TXN_{request.Year}_{request.Month}_{user.EmpId}"
-                );
-
-                if (paymentId > 0)
-                {
-                    await _salaryRepo.CreatePayslipDirectAsync(
-                        user.EmpId,
-                        user.SpaceId ?? 0,
-                        basicVal + salaryResponse.Hra + salaryResponse.Da,
-                        salaryResponse.Deductions.Sum(d => d.Amount),
-                        finalAmountToPay,
-                        paymentId,
-                        basicVal,
-                        salaryResponse.Allowances.Sum(a => a.Amount),
-                        breakdownJson,
-                        "Direct Transfer",
-                        $"TXN_{request.Year}_{request.Month}_{user.EmpId}"
-                    );
-                    successCount++;
-                }
-            }
-
+            var successCount = await _salaryService.ProcessMonthPayrollAsync(adminEmpId, request.Month, request.Year);
             return Ok(new { message = $"Successfully processed monthly payroll for {successCount} employees.", processedCount = successCount });
         }
-        catch (System.Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            System.Console.WriteLine($"[PayrollController] Error in ProcessMonthPayroll: {ex.Message}");
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PayrollController] Error in ProcessMonthPayroll: {ex.Message}");
             return StatusCode(500, new { message = "Failed to process payroll for the month." });
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  GET /api/payroll/salary-slip/{empId}?month=&year=
+    //  Returns a structured salary slip with full breakdown
+    // ──────────────────────────────────────────────────────────────────
+    [HttpGet("salary-slip/{empId:int}")]
+    [Authorize(Roles = "Admin,Manager")]
+    public async Task<IActionResult> GetSalarySlip(int empId, [FromQuery] int month = 0, [FromQuery] int year = 0)
+    {
+        try
+        {
+            if (month == 0) month = DateTime.UtcNow.Month;
+            if (year == 0) year = DateTime.UtcNow.Year;
+
+            // Get employee info
+            var empSql = @"SELECT u.empid, u.name, u.email, u.spaceid, s.spacename 
+                           FROM t_users u LEFT JOIN t_spaces s ON u.spaceid = s.spaceid 
+                           WHERE u.empid = @EmpId;";
+            var emp = await Dapper.SqlMapper.QueryFirstOrDefaultAsync<dynamic>(_db, empSql, new { EmpId = empId });
+            if (emp == null) return NotFound(new { message = "Employee not found." });
+
+            // Get base salary
+            var baseSalarySql = @"SELECT COALESCE(basic, 25000) FROM t_employeesalary WHERE empid = @EmpId;";
+            var baseSalary = await Dapper.SqlMapper.ExecuteScalarAsync<decimal?>(_db, baseSalarySql, new { EmpId = empId }) ?? 25000m;
+
+            // Get allowances
+            var allowancesSql = @"SELECT name, type, value FROM t_allowances WHERE spaceid = @SpaceId ORDER BY allowanceid;";
+            var allowances = (await Dapper.SqlMapper.QueryAsync<dynamic>(_db, allowancesSql, new { SpaceId = (int)emp.spaceid })).ToList();
+
+            // Get deductions
+            var deductionsSql = @"SELECT name, type, value FROM t_deductions WHERE spaceid = @SpaceId ORDER BY deductionid;";
+            var deductionsRaw = (await Dapper.SqlMapper.QueryAsync<dynamic>(_db, deductionsSql, new { SpaceId = (int)emp.spaceid })).ToList();
+
+            // Calculate allowance amounts
+            var allowanceItems = allowances.Select(a => {
+                decimal calcAmount = ((string)a.type)?.ToLower() == "percentage"
+                    ? baseSalary * (decimal)a.value / 100m
+                    : (decimal)a.value;
+                return new SalaryLineItem
+                {
+                    Name = (string)(a.name ?? ""),
+                    Type = (string)(a.type ?? "Fixed"),
+                    ConfiguredValue = (decimal)a.value,
+                    CalculatedAmount = Math.Round(calcAmount, 2)
+                };
+            }).ToList();
+
+            // Calculate deduction amounts
+            var deductionItems = deductionsRaw.Select(d => {
+                decimal calcAmount = ((string)d.type)?.ToLower() == "percentage"
+                    ? baseSalary * (decimal)d.value / 100m
+                    : (decimal)d.value;
+                return new SalaryLineItem
+                {
+                    Name = (string)(d.name ?? ""),
+                    Type = (string)(d.type ?? "Fixed"),
+                    ConfiguredValue = (decimal)d.value,
+                    CalculatedAmount = Math.Round(calcAmount, 2)
+                };
+            }).ToList();
+
+            decimal totalAllowances = allowanceItems.Sum(a => a.CalculatedAmount);
+            decimal totalDeductions = deductionItems.Sum(d => d.CalculatedAmount);
+            decimal grossSalary = baseSalary + totalAllowances;
+            decimal netSalary = grossSalary - totalDeductions;
+
+            // Get attendance for the month
+            var attSql = @"SELECT COUNT(DISTINCT attendancedate) AS dayspresent, 
+                           COALESCE(SUM(overtimehours), 0) AS overtimehours
+                           FROM t_attendance 
+                           WHERE empid = @EmpId 
+                             AND EXTRACT(MONTH FROM attendancedate) = @Month 
+                             AND EXTRACT(YEAR FROM attendancedate) = @Year 
+                             AND clockin IS NOT NULL;";
+            var att = await Dapper.SqlMapper.QueryFirstOrDefaultAsync<dynamic>(_db, attSql, new { EmpId = empId, Month = month, Year = year });
+
+            // Get leaves
+            var leavesSql = @"SELECT COUNT(*) FROM t_leaves 
+                              WHERE empid = @EmpId 
+                                AND EXTRACT(MONTH FROM leavedate) = @Month 
+                                AND EXTRACT(YEAR FROM leavedate) = @Year 
+                                AND status = 'Approved';";
+            var leaveDays = await Dapper.SqlMapper.ExecuteScalarAsync<int>(_db, leavesSql, new { EmpId = empId, Month = month, Year = year });
+
+            // Working days calculation (exclude Sundays)
+            int daysInMonth = DateTime.DaysInMonth(year, month);
+            int totalWorkingDays = 0;
+            for (int d = 1; d <= daysInMonth; d++)
+            {
+                if (new DateTime(year, month, d).DayOfWeek != DayOfWeek.Sunday)
+                    totalWorkingDays++;
+            }
+
+            var monthNames = new[] { "", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+
+            var slip = new SalarySlip
+            {
+                EmpId = empId,
+                Name = (string)(emp.name ?? ""),
+                Email = (string)(emp.email ?? ""),
+                SpaceName = (string)(emp.spacename ?? ""),
+                SpaceId = (int)emp.spaceid,
+                Month = month,
+                Year = year,
+                MonthName = month >= 1 && month <= 12 ? monthNames[month] : "",
+                BaseSalary = baseSalary,
+                Allowances = allowanceItems,
+                TotalAllowances = totalAllowances,
+                GrossSalary = grossSalary,
+                Deductions = deductionItems,
+                TotalDeductions = totalDeductions,
+                TotalWorkingDays = totalWorkingDays,
+                DaysPresent = att != null ? (int)att.dayspresent : 0,
+                LeaveDays = leaveDays,
+                OvertimeHours = att != null ? (decimal)att.overtimehours : 0m,
+                NetSalary = Math.Round(netSalary, 2),
+            };
+
+            return Ok(slip);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PayrollController] Error in GetSalarySlip: {ex.Message}\n{ex.StackTrace}");
+            return StatusCode(500, new { message = "Failed to generate salary slip.", error = ex.Message });
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  GET /api/payroll/export-excel?spaceId=&month=&year=
+    //  Downloads enhanced dual-sheet Excel (Monthly Report + Yearly Summary)
+    // ──────────────────────────────────────────────────────────────────
+    [HttpGet("export-excel")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ExportPayrollExcel([FromQuery] int spaceId, [FromQuery] int month, [FromQuery] int year)
+    {
+        try
+        {
+            if (spaceId <= 0 || month < 1 || month > 12 || year < 2020)
+                return BadRequest(new { message = "Invalid spaceId, month, or year." });
+
+            var bytes = await _excelService.ExportPayrollReportAsync(spaceId, month, year);
+            var fileName = $"Payroll_Report_Space{spaceId}_{year}-{month:00}.xlsx";
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PayrollController] Error in ExportPayrollExcel: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to generate Excel report." });
         }
     }
 }

@@ -1,0 +1,429 @@
+================================================================================
+          MICROTECHNIQUE PAYROLL & HR MANAGEMENT PLATFORM - ARCHITECTURE REFERENCE
+================================================================================
+
+This document provides a detailed overview of the system architecture, database
+tables, columns, user roles, API routing, and core functionalities of the 
+Microtechnique Payroll and HR system.
+
+--------------------------------------------------------------------------------
+1. TECHNOLOGY STACK OVERVIEW
+--------------------------------------------------------------------------------
+- Backend: ASP.NET Core Web API (.NET 8.0)
+  * Database Connector: Npgsql (PostgreSQL client)
+  * Data Mapping: Dapper (configured for snake_case conversion)
+  * Authentication: JWT Bearer tokens
+  * Real-Time Alerts: ASP.NET Core SignalR (WebSockets)
+  * Email Service: Resend API integration for OTP & notifications
+  * Task Scheduler: MonthEndHostedService (automates payroll checks)
+
+- Frontend: React.js SPA (configured in react-crud)
+  * Styling: Vanilla CSS / Modern Tailwind CSS
+  * State & Cache Management: TanStack React Query (v4/v5)
+  * Notifications: React Hot Toast
+  * Routing: React Router DOM (v6)
+
+--------------------------------------------------------------------------------
+2. DATABASE SCHEMA (TABLES & COLUMNS)
+--------------------------------------------------------------------------------
+All tables are mapped to PostgreSQL with Dapper handling translation between 
+C# PascalCase models and database snake_case columns.
+
+[1] Table: t_users
+---------------------------------------------
+Stores all user information, credentials, and payment profiles.
+- empid (INTEGER - SERIAL - PRIMARY KEY)
+- spaceid (INTEGER - Nullable FK)
+- name (VARCHAR(200) - Nullable)
+- email (VARCHAR(255) - UNIQUE)
+- passwordhash (VARCHAR(255))
+- gender (VARCHAR(50))
+- status (VARCHAR(50) - e.g., 'Active', 'Pending', 'Inactive')
+- role (VARCHAR(50) - 'SuperAdmin', 'Admin', 'Manager', 'TeamLead', 'Employee')
+- phone (VARCHAR(50))
+- address (TEXT)
+- dateofjoining (DATE - Default: CURRENT_DATE)
+- profilephotourl (TEXT)
+- backupemail (VARCHAR(100))
+- accountnumber (VARCHAR(50))
+- bankname (VARCHAR(100))
+- accountholdername (VARCHAR(150))
+- ifsccode (VARCHAR(20))
+- upiid (VARCHAR(100))
+- is_approved (BOOLEAN - Default: FALSE)
+- statusreason (TEXT)
+- statusbysuperadmin (BOOLEAN - Default: FALSE)
+
+[2] Table: t_spaces
+---------------------------------------------
+Defines organizational spaces (departments, client accounts, or contract units).
+- spaceid (INTEGER - SERIAL - PRIMARY KEY)
+- spacename (VARCHAR(255))
+- adminid (INTEGER - FK to t_users.empid)
+- numberofemployees (INTEGER)
+- createdat (TIMESTAMP WITHOUT TIME ZONE)
+- isactive (BOOLEAN - Default: TRUE)
+- numberofbreaks (INTEGER - Default: 1)
+- breaktime (INTEGER - break limit in minutes, e.g., 60)
+- workstarttime (TIME - Standard clock-in limit)
+- workendtime (TIME - Standard clock-out limit)
+- workinghours (INTEGER - Required daily work duration)
+- type (VARCHAR(20) - 'Department' or 'Contract')
+- enddate (DATE - Nullable, used for Contract spaces)
+- workingdays (TEXT - JSON array string containing short day names, e.g., '["Mon","Tue","Wed","Thu","Fri"]')
+- maxspaces (INTEGER - Limit for spaces/subs)
+
+[3] Table: t_attendance
+---------------------------------------------
+Logs daily working and checking activities.
+- attendanceid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER - FK to t_users.empid)
+- attendancedate (DATE)
+- clockin (TIMESTAMP)
+- clockout (TIMESTAMP)
+- totalhours (NUMERIC(5,2))
+- status (VARCHAR(50) - e.g., 'Present', 'Late', 'Absent')
+- lateminutes (INTEGER)
+- earlyexitminutes (INTEGER)
+- breakhours (NUMERIC(5,2) - Default: 0)
+- overtimehours (NUMERIC(5,2) - Default: 0)
+- createdat (TIMESTAMP)
+
+[4] Table: employeebreaks
+---------------------------------------------
+Tracks individual break durations to enforce daily thresholds.
+- breakid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER)
+- breakstart (TIMESTAMP WITHOUT TIME ZONE)
+- breakend (TIMESTAMP WITHOUT TIME ZONE)
+- totalbreakminutes (INTEGER - Default: 0)
+- createdat (TIMESTAMP WITHOUT TIME ZONE)
+
+[5] Table: t_leaves
+---------------------------------------------
+Tracks personal/medical days off requested by employees.
+- leaveid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER - FK to t_users.empid)
+- spaceid (INTEGER)
+- leavedate (DATE)
+- reason (TEXT)
+- status (VARCHAR(50) - 'Pending', 'Approved', 'Rejected')
+- leavetype (VARCHAR(20) - 'Normal', 'Emergency', 'College')
+- halfday (BOOLEAN - Default: FALSE)
+- approvedby (INTEGER - FK to t_users.empid)
+- createdat (TIMESTAMP)
+* CONSTRAINT: uq_emp_leavedate (UNIQUE empid + leavedate)
+
+[6] Table: t_space_leave_config
+---------------------------------------------
+Defines monthly leave quotas for a specific Space.
+- configid (INTEGER - SERIAL - PRIMARY KEY)
+- spaceid (INTEGER - UNIQUE FK)
+- emergency_leaves_per_month (INTEGER - Default: 1)
+- college_leaves_per_month (INTEGER - Default: 1)
+- normal_leaves_per_month (INTEGER - Default: 999)
+- createdat (TIMESTAMP)
+- updatedat (TIMESTAMP)
+
+[7] Table: t_worklogs
+---------------------------------------------
+Stores daily execution logs written by employees for assigned tasks.
+- logid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER - FK to t_users.empid)
+- taskid (INTEGER - FK to t_projecttasks.taskid)
+- hoursworked (NUMERIC(5,2))
+- description (TEXT)
+- workdate (DATE)
+- createdat (TIMESTAMP)
+
+[8] Table: t_projects
+---------------------------------------------
+Groups project assignments.
+- projectid (INTEGER - SERIAL - PRIMARY KEY)
+- createdbyid (INTEGER - FK to creator's empid)
+- adminid (INTEGER - FK to owning admin's empid)
+- spaceid (INTEGER)
+- projectname (VARCHAR(255))
+- description (TEXT)
+- links (TEXT[] - array of URLs)
+- documentationlinks (TEXT[] - array of URLs)
+- startdate (DATE)
+- enddate (DATE)
+- teamid (INTEGER)
+- createdat (TIMESTAMP)
+
+[9] Table: t_projecttasks
+---------------------------------------------
+Tracks components of work inside a project.
+- taskid (INTEGER - SERIAL - PRIMARY KEY)
+- projectid (INTEGER - FK to t_projects.projectid)
+- assignedtoempid (INTEGER - FK to t_users.empid)
+- tasktitle (VARCHAR(255))
+- taskdescription (TEXT)
+- taskstatus (VARCHAR(50) - 'Pending', 'InProgress', 'Completed')
+- priority (VARCHAR(50) - 'Low', 'Medium', 'High', 'Critical')
+- startdate (DATE)
+- duedate (DATE)
+- completedat (TIMESTAMP)
+- workinghours (INTEGER - Estimated tasks hours allocated)
+- estimatedhours (NUMERIC(6,2))
+- createdat (TIMESTAMP)
+
+[10] Table: t_employeesalary
+---------------------------------------------
+Standard basic salaries per employee.
+- salaryid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER - UNIQUE)
+- spaceid (INTEGER)
+- basic (NUMERIC(12,2))
+- createdat (TIMESTAMP)
+
+[11] Table: t_allowances
+---------------------------------------------
+Configurable allowances per department.
+- allowanceid (INTEGER - SERIAL - PRIMARY KEY)
+- adminid (INTEGER)
+- spaceid (INTEGER)
+- name (VARCHAR(100))
+- type (VARCHAR(20) - 'Percentage' or 'Fixed')
+- value (NUMERIC(10,2))
+- createdat (TIMESTAMP)
+
+[12] Table: t_deductions
+---------------------------------------------
+Fixed/percentage deductions and penalties per department.
+- deductionid (INTEGER - SERIAL - PRIMARY KEY)
+- adminid (INTEGER)
+- spaceid (INTEGER)
+- name (VARCHAR(100))
+- type (VARCHAR(20) - 'Percentage' or 'Fixed')
+- value (NUMERIC(10,2))
+- deductiontype (VARCHAR(50) - 'Standard', 'Late', 'Absent')
+- createdat (TIMESTAMP)
+
+[13] Table: t_payrollpayments
+---------------------------------------------
+Records execution history of payments processed during payroll cycles.
+- paymentid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER - FK to t_users.empid)
+- spaceid (INTEGER)
+- totalamount (NUMERIC(12,2))
+- deduction (NUMERIC(12,2))
+- finalamount (NUMERIC(12,2))
+- status (VARCHAR(20) - 'Pending', 'Paid')
+- paidat (TIMESTAMP)
+- createdat (TIMESTAMP)
+- ismanual (BOOLEAN - Default: FALSE)
+- allowanceamount (NUMERIC(12,2))
+- deductionamount (NUMERIC(12,2))
+- paymentmethod (VARCHAR(20))
+- transactionid (TEXT)
+- groupid (UUID)
+
+[14] Table: t_payslips
+---------------------------------------------
+Detailed archival records of generated payslips for employee download.
+- slipid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER - FK to t_users.empid)
+- spaceid (INTEGER)
+- baseamount (NUMERIC(12,2))
+- deduction (NUMERIC(12,2))
+- finalamount (NUMERIC(12,2))
+- type (VARCHAR(20) - 'Payroll' or 'Contract')
+- paymentid (INTEGER - Nullable link to t_payrollpayments)
+- generatedat (TIMESTAMP)
+- basic (NUMERIC(12,2))
+- totalallowance (NUMERIC(12,2))
+- totaldeduction (NUMERIC(12,2))
+- breakdown (TEXT - Serialized JSON breakdown of calculations)
+- paymentmethod (VARCHAR(20))
+- transactionid (TEXT)
+- accountnumber (VARCHAR(50))
+- bankname (VARCHAR(100))
+- accountholdername (VARCHAR(150))
+- ifsccode (VARCHAR(20))
+- upiid (VARCHAR(100))
+
+[15] Table: t_contractpayments
+---------------------------------------------
+For spaces running under type = 'Contract' (pays department/client vendor).
+- paymentid (INTEGER - SERIAL - PRIMARY KEY)
+- spaceid (INTEGER)
+- amount (NUMERIC(12,2))
+- paymentmethod (VARCHAR(20))
+- status (VARCHAR(20))
+- transactionid (TEXT)
+- paidat (TIMESTAMP)
+- createdat (TIMESTAMP)
+
+[16] Table: t_otp
+---------------------------------------------
+Stores authentication codes for secure recovery processes.
+- id (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER)
+- otp (VARCHAR(10))
+- expiresat (TIMESTAMP)
+- isused (BOOLEAN - Default: FALSE)
+
+[17] Table: t_emp_documents
+---------------------------------------------
+Documents uploaded by employees during profile configuration.
+- docid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER - FK to t_users.empid)
+- documenttype (VARCHAR(100) - e.g., 'Aadhar', 'PAN', 'Certificate')
+- documentnumber (VARCHAR(100))
+- fileurl (TEXT)
+- uploadedat (TIMESTAMP)
+* UNIQUE CONSTRAINT: (empid, documenttype)
+
+[18] Table: t_employeewarnings
+---------------------------------------------
+Internal warnings sent to employees with options to attach custom fines.
+- warningid (INTEGER - SERIAL - PRIMARY KEY)
+- empid (INTEGER)
+- warningtext (TEXT)
+- penaltyamount (NUMERIC(12,2) - Optional deduction)
+- issuedby (INTEGER - FK to issuer's empid)
+
+[19] Table: t_notices
+---------------------------------------------
+Acts as notice board announcement manager and interactive ticket desk.
+- noticeid (INTEGER - SERIAL - PRIMARY KEY)
+- adminid (INTEGER - Nullable FK)
+- spaceid (INTEGER - Nullable FK)
+- employeeid (INTEGER - Nullable FK)
+- noticetext (TEXT)
+- totype (VARCHAR(50) - 'Notice', 'Notification', 'Query')
+- createdat (TIMESTAMP)
+- preference (VARCHAR(20))
+- reply (TEXT)
+- status (VARCHAR(20) - Default: 'Open')
+- repliedby (INTEGER - FK to responder's empid)
+- isdeleted (BOOLEAN - Default: FALSE)
+- eventtype (VARCHAR(50) - real-time hooks like 'ClockIn', 'MonthEndPayrollAlert')
+- targetrole (VARCHAR(50) - targets for notices, e.g. 'Admin,Manager')
+- is_read_admin (BOOLEAN)
+- is_read_manager (BOOLEAN)
+- is_read_tl (BOOLEAN)
+- is_read_employee (BOOLEAN)
+
+[20] Table: t_superadmins
+---------------------------------------------
+Exclusive authentication details for SuperAdmin dashboard.
+- id (INTEGER - SERIAL - PRIMARY KEY)
+- email (VARCHAR(255) - UNIQUE)
+- passwordhash (VARCHAR(255))
+- name (VARCHAR(255))
+- created_at (TIMESTAMP)
+- updated_at (TIMESTAMP)
+
+--------------------------------------------------------------------------------
+3. USER ROLES & PERMISSION SUMMARY
+--------------------------------------------------------------------------------
+The application utilizes JWT roles. The route permissions are mapped as follows:
+
+- SuperAdmin:
+  * Manages Admin approvals and profile lockdowns (is_approved, statusbysuperadmin).
+  * Manages global settings and active directory of organizations/spaces.
+  * Pages: /superadmin (controls SuperAdminDashboard)
+
+- Admin:
+  * Owns one or multiple Space structures.
+  * Manages allowances, standard deductions, and basic salaries.
+  * Adds and registers employees, managers, and team leads to their space.
+  * Processes monthly payroll and issues direct transfer payouts.
+  * Reviews leaves, updates configs, issues warnings, posts announcements.
+  * Pages: /admin, /admin/users, /admin/projects, /admin/attendance, 
+           /admin/salary, /admin/queries, /admin/spaces, /admin/leaves, 
+           /payroll/:spaceId, /admin/profile
+
+- Manager:
+  * Direct manager of the space / department.
+  * Reviews leave applications, tracks attendance sheets, monitors user logs.
+  * Registers/updates employees in the department (/employee/manage-users).
+  * Pages: /employee, /employee/attendance, /employee/salary, /employee/queries, 
+           /employee/worklogs, /employee/manage-users, /employee/all-employees, 
+           /employee/progress, /employee/projects, /employee/profile, 
+           /employee/leaves
+
+- TeamLead:
+  * Project supervisor.
+  * Creates Projects, writes deliverables, and assigns Tasks to employees.
+  * Approves completed tasks, reviews worklog lists, and tracks project progress.
+  * Pages: /employee (mapped to TLDashboard), /employee/projects, 
+           /employee/attendance, /employee/leaves (read/approve limits)
+
+- Employee:
+  * Standard workspace contributor.
+  * Clocks in and out daily. Records break sessions (within daily limits).
+  * Submits worklogs detailing hours worked against assigned tasks.
+  * Applies for leaves (Normal, Emergency, College) and monitors status.
+  * Submits queries to admins and reads notice board announcements.
+  * Views monthly payslips, CTC summaries, and annual stats.
+  * Pages: /employee, /employee/attendance, /employee/salary, /employee/queries,
+           /employee/worklogs, /employee/all-employees, /employee/progress, 
+           /employee/projects, /employee/profile, /employee/leaves
+
+--------------------------------------------------------------------------------
+4. SYSTEM MODULES & FUNCTIONS DESCRIPTION
+--------------------------------------------------------------------------------
+
+[A] AUTHENTICATION & SECURITY
+- Registration & Onboarding: Users register under specific roles. Admin registers 
+  managers/employees to their specific department/space.
+- Approvals: Admin accounts must be approved by SuperAdmin before logging in.
+- OTP System: Forgotten passwords generate verification pins stored in t_otp.
+  The service sends a password reset email using the Resend provider.
+
+[B] TIME & ATTENDANCE TRACKING
+- Clock-In: Saves clock-in timestamp. Checks department standard WorkStartTime.
+  If the employee logs in late, late minutes are calculated:
+     LateMinutes = ClockIn - StandardStartTime
+  and attendance status is set to "Late".
+- Breaks: Employees can pause daily tasks. It writes to employeebreaks.
+  Total break minutes are computed and saved.
+- Clock-Out: Validates exit time. Checks standard exit time and total working
+  hours required (e.g. 8 hours). Shortfalls calculate EarlyExitMinutes.
+- Daily Status: Mapped automatically as "Present", "Late", or "Absent".
+
+[C] DYNAMIC PENALTY SYSTEM (PenaltyCalibrator)
+- Automated calculation of attendance-based salary adjustments:
+  * LATE ARRIVAL PENALTY: Deducts salary if the employee is late more than a
+    configured grace threshold.
+  * ABSENT PENALTY: Deducts salary for workdays with no attendance logs or unapproved
+    leaves.
+  * EARLY EXIT PENALTY: Fine calculations mapped to early exit minutes.
+
+[D] LEAVE MANAGEMENT
+- Leaves are categorized into Normal, Emergency, and College.
+- Employees check their remaining leaf allocations (remaining balance calculated
+  dynamically from space leave policies).
+- Submitting a request updates t_leaves as "Pending".
+- SignalR triggers an instant push to Admin/Manager devices.
+- Once updated to "Approved" or "Rejected", the audit record is saved.
+
+[E] PROJECT & TASK COLLABORATION
+- TeamLeads create projects and tasks with fields like priority and start dates.
+- Employees can view their assigned task lists and mark them as InProgress or Completed.
+- Task completion broadcasts real-time alerts to the TL and Admin.
+
+[F] WORKLOG SUBMISSIONS
+- Employees submit daily details about task hours worked.
+- System evaluates actual hours vs estimated hours to draw completion rates.
+
+[G] NOTICE BOARD & HELPDESK
+- Notice Creation: Broadcasts corporate bulletins.
+- Ticket Support Queries: Employees generate tickets under "Query" type.
+  Admins/Managers receive alerts, provide replies (repliedby, reply), and
+  toggle status (Open/Closed).
+
+[H] SALARY & PAYROLL CALCULATIONS
+- Structure: Net pay calculations take base salary, add active fixed/percentage
+  allowances (t_allowances), and subtract deductions (t_deductions) and late/absenteeism
+  penalties calculated dynamically.
+- Process Payroll: Admin processes month-end payroll, creating transaction logs in
+  t_payrollpayments, and archiving finalized payslip details in t_payslips (with
+  breakdowns and active bank details at the time of payment).
+- Auto-alerts: MonthEndHostedService triggers automatically on the last day of the
+  month to notify Admins to verify payroll components.
+================================================================================
