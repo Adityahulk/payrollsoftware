@@ -44,6 +44,7 @@ namespace Backend.Controllers
         }
 
         [HttpPost("upload")]
+        [Consumes("multipart/form-data")]
         public async Task<IActionResult> UploadScreenshot([FromForm] IFormFile file)
         {
             var empId = GetEmpId();
@@ -177,6 +178,7 @@ namespace Backend.Controllers
         /// stores the relative URL in PostgreSQL, then purges records older than 2 months.
         /// </summary>
         [HttpPost("monitoring/upload")]
+        [Consumes("multipart/form-data")]
         public async Task<IActionResult> UploadMonitoringScreenshot([FromForm] IFormFile file)
         {
             var empId = GetEmpId();

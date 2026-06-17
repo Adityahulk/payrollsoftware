@@ -172,6 +172,7 @@ namespace Backend.Controllers
         //  POST /api/Monitor/upload   — employee uploads a screenshot
         // ─────────────────────────────────────────────────────────────────────────
         [HttpPost("upload")]
+        [Consumes("multipart/form-data")]
         public async Task<IActionResult> UploadScreenshot(IFormFile? file, IFormFile? imageFile)
         {
             var empId = GetEmpId();
@@ -223,6 +224,7 @@ namespace Backend.Controllers
         //  POST /api/Monitor/upload-video   — employee uploads a video chunk
         // ─────────────────────────────────────────────────────────────────────────
         [HttpPost("upload-video")]
+        [Consumes("multipart/form-data")]
         public async Task<IActionResult> UploadVideo(IFormFile? videoFile, IFormFile? file)
         {
             var empId = GetEmpId();
