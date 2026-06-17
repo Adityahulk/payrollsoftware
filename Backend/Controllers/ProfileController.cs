@@ -178,7 +178,7 @@ public class ProfileController : ControllerBase
     // POST /api/Profile/photo
     [HttpPost("photo")]
     [Consumes("multipart/form-data")]
-    public async Task<IActionResult> UploadPhoto([FromForm] IFormFile file)
+    public async Task<IActionResult> UploadPhoto(IFormFile file)
     {
         var empId = GetEmpId();
         if (empId == 0) return Unauthorized(new { message = "Invalid token." });
@@ -217,7 +217,7 @@ public class ProfileController : ControllerBase
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadDocuments([FromForm] List<string> documentTypes,
                                                       [FromForm] List<string> documentNumbers,
-                                                      [FromForm] List<IFormFile> files)
+                                                      List<IFormFile> files)
     {
         var empId = GetEmpId();
         if (empId == 0) return Unauthorized(new { message = "Invalid token." });

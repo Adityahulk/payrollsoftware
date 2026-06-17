@@ -45,7 +45,7 @@ namespace Backend.Controllers
 
         [HttpPost("upload")]
         [Consumes("multipart/form-data")]
-        public async Task<IActionResult> UploadScreenshot([FromForm] IFormFile file)
+        public async Task<IActionResult> UploadScreenshot(IFormFile file)
         {
             var empId = GetEmpId();
             var spaceId = GetSpaceId();
@@ -179,7 +179,7 @@ namespace Backend.Controllers
         /// </summary>
         [HttpPost("monitoring/upload")]
         [Consumes("multipart/form-data")]
-        public async Task<IActionResult> UploadMonitoringScreenshot([FromForm] IFormFile file)
+        public async Task<IActionResult> UploadMonitoringScreenshot(IFormFile file)
         {
             var empId = GetEmpId();
 
