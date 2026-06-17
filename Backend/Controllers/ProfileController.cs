@@ -177,6 +177,7 @@ public class ProfileController : ControllerBase
 
     // POST /api/Profile/photo
     [HttpPost("photo")]
+    [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadPhoto([FromForm] IFormFile file)
     {
         var empId = GetEmpId();
@@ -213,6 +214,7 @@ public class ProfileController : ControllerBase
 
     // POST /api/Profile/documents
     [HttpPost("documents")]
+    [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadDocuments([FromForm] List<string> documentTypes,
                                                       [FromForm] List<string> documentNumbers,
                                                       [FromForm] List<IFormFile> files)
