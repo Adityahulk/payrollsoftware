@@ -89,8 +89,8 @@ export default function SalaryPage({ isAdmin }) {
   useEffect(() => {
     getPayslipSettings()
       .then(data => {
-        const cleanBaseUrl = API_BASE_URL.endsWith('/api') 
-          ? API_BASE_URL.slice(0, -4) 
+        const cleanBaseUrl = API_BASE_URL.endsWith('/api')
+          ? API_BASE_URL.slice(0, -4)
           : API_BASE_URL;
         setPayslipSettings({
           ...data,
@@ -98,7 +98,7 @@ export default function SalaryPage({ isAdmin }) {
           companyLogoUrl: data.logoUrl ? `${cleanBaseUrl}${data.logoUrl}` : ''
         });
       })
-      .catch(() => {}); // Non-critical — cards have fallback values
+      .catch(() => { }); // Non-critical — cards have fallback values
   }, []);
 
   // Load roster for administrators
@@ -256,11 +256,11 @@ export default function SalaryPage({ isAdmin }) {
       const companyName = payslipSettings?.companyName || "Default Company";
       const monthName = MONTHS[selMonth - 1];
       const opt = {
-        margin:       10,
-        filename:     `SalaryBreakdown_${companyName.replace(/\s+/g, '_')}_${monthName}_${selYear}.pdf`,
-        image:        { type: 'jpeg', quality: 0.98 },
-        html2canvas:  { scale: 2, useCORS: true, logging: false },
-        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        margin: 10,
+        filename: `SalaryBreakdown_${companyName.replace(/\s+/g, '_')}_${monthName}_${selYear}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
       };
 
       window.html2pdf()
@@ -333,7 +333,7 @@ export default function SalaryPage({ isAdmin }) {
                 </select>
               </div>
             )}
-            
+
             <select
               className="form-select"
               id="salary-month-select"
@@ -428,7 +428,7 @@ export default function SalaryPage({ isAdmin }) {
                         <span className="badge badge-success">Active Structure</span>
                       </div>
                     </div>
-                    
+
                     <div id="salary-breakdown-renderer" style={{ border: '1px solid var(--gray-100)', borderRadius: '12px', overflow: 'hidden' }}>
                       <PayslipTemplateRenderer
                         settings={payslipSettings}

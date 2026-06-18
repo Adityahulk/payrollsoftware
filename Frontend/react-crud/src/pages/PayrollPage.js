@@ -10,25 +10,25 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
 export default function PayrollPage() {
   const { spaceId } = useParams();
   const navigate = useNavigate();
-  
+
   // State variables
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [summary, setSummary] = useState(null);
   const [evaluations, setEvaluations] = useState([]);
   const [expandedEmployee, setExpandedEmployee] = useState(null);
-  
+
   // Financial & Penalty state
   const [applyPenalties, setApplyPenalties] = useState(true);
   const [selMonth, setSelMonth] = useState(new Date().getMonth() + 1);
   const [selYear, setSelYear] = useState(new Date().getFullYear());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
-  
+
   // Space Rules configuration lists
   const [allowancesList, setAllowancesList] = useState([]);
   const [deductionsList, setDeductionsList] = useState([]);
-  
+
   // Form input states for Rules Modal
   const [newAllowance, setNewAllowance] = useState({ name: '', type: 'Fixed', value: '' });
   const [newDeduction, setNewDeduction] = useState({ name: '', type: 'Fixed', value: '', deductiontype: 'Standard' });
@@ -383,11 +383,11 @@ export default function PayrollPage() {
       };
       await spacesApi.setEmployeeSalary(payload);
       toast.success('Basic salary updated successfully!');
-      
+
       // Refresh local copy of selected employee to reflect live basic
       const updatedEmpId = selectedEmployee.empId || selectedEmployee.EmpId;
       await loadPayrollData();
-      
+
       // Wait a brief moment to find updated values from state
       setTimeout(() => {
         setEvaluations(prev => {
@@ -509,7 +509,7 @@ export default function PayrollPage() {
   return (
     <AppLayout role="admin">
       <div className="page-content fade-in" style={{ maxWidth: 1200, margin: '0 auto', paddingBottom: 60, position: 'relative' }}>
-        
+
         {/* HEADER BAR */}
         <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -530,7 +530,7 @@ export default function PayrollPage() {
               </p>
             </div>
           </div>
-          
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {/* TOGGLE FOR PERFORMANCE PENALTIES */}
             <div style={{
@@ -545,10 +545,10 @@ export default function PayrollPage() {
             }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--gray-700)' }}>Performance Penalties</span>
               <label className="switch" style={{ position: 'relative', display: 'inline-block', width: 44, height: 24 }}>
-                <input 
-                  type="checkbox" 
-                  checked={applyPenalties} 
-                  onChange={(e) => setApplyPenalties(e.target.checked)} 
+                <input
+                  type="checkbox"
+                  checked={applyPenalties}
+                  onChange={(e) => setApplyPenalties(e.target.checked)}
                   style={{ opacity: 0, width: 0, height: 0 }}
                 />
                 <span className="slider" style={{
@@ -573,13 +573,13 @@ export default function PayrollPage() {
               </label>
             </div>
 
-            <button 
-              className="btn" 
-              onClick={() => setShowSettingsModal(true)} 
+            <button
+              className="btn"
+              onClick={() => setShowSettingsModal(true)}
               style={{
-                gap: 8, 
-                background: '#EEF2F6', 
-                color: 'var(--gray-700)', 
+                gap: 8,
+                background: '#EEF2F6',
+                color: 'var(--gray-700)',
                 border: '1px solid var(--gray-200)',
                 fontWeight: 600
               }}
@@ -643,7 +643,7 @@ export default function PayrollPage() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
-            
+
             {/* SPACE SUMMARY PANEL */}
             {summary && (
               <div className="card" style={{
@@ -706,10 +706,10 @@ export default function PayrollPage() {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 12 }}>
-                <button 
-                  className="btn" 
-                  onClick={() => triggerCheckout(unpaidComplete)} 
-                  disabled={paying || unpaidComplete.length === 0} 
+                <button
+                  className="btn"
+                  onClick={() => triggerCheckout(unpaidComplete)}
+                  disabled={paying || unpaidComplete.length === 0}
                   style={{
                     background: '#E6F4EA',
                     color: '#137333',
@@ -721,9 +721,9 @@ export default function PayrollPage() {
                   <span className="material-symbols-outlined" style={{ fontSize: 18 }}>check_circle</span>
                   Pay All Complete Profiles ({unpaidComplete.length})
                 </button>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={() => triggerCheckout(unpaidIncomplete)} 
+                <button
+                  className="btn btn-primary"
+                  onClick={() => triggerCheckout(unpaidIncomplete)}
                   disabled={paying || unpaidIncomplete.length === 0}
                   style={{ gap: 6, background: '#EF4444', borderColor: '#EF4444' }}
                 >
@@ -735,7 +735,7 @@ export default function PayrollPage() {
 
             {/* COHORTS SECTION */}
             <div className="grid grid-2" style={{ gap: 28, alignItems: 'start' }}>
-              
+
               {/* COMPLETE COHORT (GREEN OUTLINE) */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -768,9 +768,9 @@ export default function PayrollPage() {
                         transition: '0.2s',
                         transform: 'scale(1)'
                       }}
-                      onClick={() => handleOpenDrawer(emp)}
-                      onMouseEnter={(e) => e.currentTarget.style.borderColor = '#10B981'}
-                      onMouseLeave={(e) => e.currentTarget.style.borderColor = '#A7F3D0'}
+                        onClick={() => handleOpenDrawer(emp)}
+                        onMouseEnter={(e) => e.currentTarget.style.borderColor = '#10B981'}
+                        onMouseLeave={(e) => e.currentTarget.style.borderColor = '#A7F3D0'}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div>
@@ -788,8 +788,8 @@ export default function PayrollPage() {
                         </div>
 
                         <div style={{ display: 'flex', gap: 8 }}>
-                          <button 
-                            className="btn btn-secondary" 
+                          <button
+                            className="btn btn-secondary"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleOpenDrawer(emp);
@@ -799,12 +799,12 @@ export default function PayrollPage() {
                             Breakdown & Override
                           </button>
                           {!isPaid(emp) && (
-                            <button 
-                              className="btn btn-secondary" 
+                            <button
+                              className="btn btn-secondary"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 triggerCheckout([emp]);
-                              }} 
+                              }}
                               disabled={paying}
                               style={{ flex: 1, padding: '6px 12px', fontSize: 12, justifyContent: 'center', background: '#FFF', border: '1px solid #A7F3D0', color: '#047857' }}
                             >
@@ -850,9 +850,9 @@ export default function PayrollPage() {
                           gap: 12,
                           cursor: 'pointer'
                         }}
-                        onClick={() => handleOpenDrawer(emp)}
-                        onMouseEnter={(e) => e.currentTarget.style.borderColor = '#EF4444'}
-                        onMouseLeave={(e) => e.currentTarget.style.borderColor = '#FCA5A5'}
+                          onClick={() => handleOpenDrawer(emp)}
+                          onMouseEnter={(e) => e.currentTarget.style.borderColor = '#EF4444'}
+                          onMouseLeave={(e) => e.currentTarget.style.borderColor = '#FCA5A5'}
                         >
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
@@ -863,8 +863,8 @@ export default function PayrollPage() {
                               <span className={`badge ${isPaid(emp) ? 'badge-success' : 'badge-neutral'}`}>
                                 {isPaid(emp) ? 'PAID' : 'UNPAID'}
                               </span>
-                              <button 
-                                className="icon-btn" 
+                              <button
+                                className="icon-btn"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   toggleExpandEmployee(emp.empId || emp.EmpId);
@@ -892,8 +892,8 @@ export default function PayrollPage() {
 
                           {/* PENALTY BREAKDOWN ACCORDION */}
                           {isExpanded && (
-                            <div 
-                              onClick={(e) => e.stopPropagation()} 
+                            <div
+                              onClick={(e) => e.stopPropagation()}
                               style={{
                                 background: '#FFF5F5',
                                 padding: 12,
@@ -924,8 +924,8 @@ export default function PayrollPage() {
                           )}
 
                           <div style={{ display: 'flex', gap: 8 }}>
-                            <button 
-                              className="btn btn-secondary" 
+                            <button
+                              className="btn btn-secondary"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleOpenDrawer(emp);
@@ -935,12 +935,12 @@ export default function PayrollPage() {
                               Breakdown & Override
                             </button>
                             {!isPaid(emp) && (
-                              <button 
-                                className="btn btn-primary" 
+                              <button
+                                className="btn btn-primary"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   triggerCheckout([emp]);
-                                }} 
+                                }}
                                 disabled={paying}
                                 style={{ flex: 1, padding: '6px 12px', fontSize: 12, justifyContent: 'center', background: '#EF4444', borderColor: '#EF4444' }}
                               >
@@ -985,7 +985,7 @@ export default function PayrollPage() {
               maxHeight: '90vh',
               overflowY: 'auto'
             }}>
-              
+
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--gray-200)', paddingBottom: 16, marginBottom: 20 }}>
                 <h3 style={{ fontSize: 20, fontWeight: 800, color: 'var(--gray-900)', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span className="material-symbols-outlined" style={{ color: '#4F46E5', fontSize: 28 }}>settings_suggest</span>
@@ -997,38 +997,38 @@ export default function PayrollPage() {
               </div>
 
               <div className="grid grid-2" style={{ gap: 24 }}>
-                
+
                 {/* ALLOWANCES PANEL */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <h4 style={{ fontSize: 15, fontWeight: 700, color: '#047857', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span className="material-symbols-outlined" style={{ fontSize: 20 }}>add_circle</span>
                     Space Allowances (Additions)
                   </h4>
-                  
+
                   {/* Create Allowance Form */}
                   <form onSubmit={handleAddAllowance} style={{ background: '#F0FDF4', padding: 12, borderRadius: 12, border: '1px solid #A7F3D0', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <input 
-                      type="text" 
-                      placeholder="Allowance Name (e.g. HRA)" 
+                    <input
+                      type="text"
+                      placeholder="Allowance Name (e.g. HRA)"
                       value={newAllowance.name}
-                      onChange={e => setNewAllowance({...newAllowance, name: e.target.value})}
+                      onChange={e => setNewAllowance({ ...newAllowance, name: e.target.value })}
                       style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #C2E7CB', fontSize: 13 }}
                     />
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <select 
+                      <select
                         value={newAllowance.type}
-                        onChange={e => setNewAllowance({...newAllowance, type: e.target.value})}
+                        onChange={e => setNewAllowance({ ...newAllowance, type: e.target.value })}
                         style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #C2E7CB', fontSize: 13, flex: 1, background: '#FFF' }}
                       >
                         <option value="Fixed">Fixed Amount (₹)</option>
                         <option value="Percentage">Percentage of Basic (%)</option>
                       </select>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         step="0.01"
-                        placeholder={newAllowance.type === 'Fixed' ? '₹ Value' : '% Value'} 
+                        placeholder={newAllowance.type === 'Fixed' ? '₹ Value' : '% Value'}
                         value={newAllowance.value}
-                        onChange={e => setNewAllowance({...newAllowance, value: e.target.value})}
+                        onChange={e => setNewAllowance({ ...newAllowance, value: e.target.value })}
                         style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #C2E7CB', fontSize: 13, width: 90 }}
                       />
                     </div>
@@ -1063,12 +1063,12 @@ export default function PayrollPage() {
                     <span className="material-symbols-outlined" style={{ fontSize: 20 }}>remove_circle</span>
                     Space Deductions (Retentions)
                   </h4>
-                  
+
                   {/* Create Deduction Form */}
                   <form onSubmit={handleAddDeduction} style={{ background: '#FEF2F2', padding: 12, borderRadius: 12, border: '1px solid #FCA5A5', display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <label style={{ fontSize: 11, color: 'var(--gray-500)', fontWeight: 600 }}>Deduction Type / Category</label>
-                      <select 
+                      <select
                         value={newDeduction.deductiontype || 'Standard'}
                         onChange={e => {
                           const val = e.target.value;
@@ -1076,7 +1076,7 @@ export default function PayrollPage() {
                           if (val !== 'Standard') {
                             name = val; // auto-fill name for penalty categories
                           }
-                          setNewDeduction({...newDeduction, deductiontype: val, name: name});
+                          setNewDeduction({ ...newDeduction, deductiontype: val, name: name });
                         }}
                         style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #FCA5A5', fontSize: 13, background: '#FFF' }}
                       >
@@ -1088,28 +1088,28 @@ export default function PayrollPage() {
                         <option value="Pending Tasks">Pending Tasks Penalty (per pending task)</option>
                       </select>
                     </div>
-                    <input 
-                      type="text" 
-                      placeholder="Deduction Name (e.g. PF)" 
+                    <input
+                      type="text"
+                      placeholder="Deduction Name (e.g. PF)"
                       value={newDeduction.name}
-                      onChange={e => setNewDeduction({...newDeduction, name: e.target.value})}
+                      onChange={e => setNewDeduction({ ...newDeduction, name: e.target.value })}
                       style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #FCA5A5', fontSize: 13 }}
                     />
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <select 
+                      <select
                         value={newDeduction.type}
-                        onChange={e => setNewDeduction({...newDeduction, type: e.target.value})}
+                        onChange={e => setNewDeduction({ ...newDeduction, type: e.target.value })}
                         style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #FCA5A5', fontSize: 13, flex: 1, background: '#FFF' }}
                       >
                         <option value="Fixed">Fixed Retainer (₹)</option>
                         <option value="Percentage">Percentage of Basic (%)</option>
                       </select>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         step="0.01"
-                        placeholder={newDeduction.type === 'Fixed' ? '₹ Value' : '% Value'} 
+                        placeholder={newDeduction.type === 'Fixed' ? '₹ Value' : '% Value'}
                         value={newDeduction.value}
-                        onChange={e => setNewDeduction({...newDeduction, value: e.target.value})}
+                        onChange={e => setNewDeduction({ ...newDeduction, value: e.target.value })}
                         style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #FCA5A5', fontSize: 13, width: 90 }}
                       />
                     </div>
@@ -1179,7 +1179,7 @@ export default function PayrollPage() {
               boxShadow: '0 20px 40px rgba(0,0,0,0.15)',
               position: 'relative'
             }}>
-              
+
               <style>{`
                 @keyframes spin {
                   0% { transform: rotate(0deg); }
@@ -1191,11 +1191,11 @@ export default function PayrollPage() {
                   100% { left: 100%; }
                 }
               `}</style>
-              
+
               {/* Close Button */}
-              <button 
-                className="icon-btn" 
-                onClick={() => setShowCheckoutModal(false)} 
+              <button
+                className="icon-btn"
+                onClick={() => setShowCheckoutModal(false)}
                 disabled={paying || razorpayLoading || razorpaySimulating}
                 style={{ position: 'absolute', right: 20, top: 20, background: '#F1F5F9', border: 'none', padding: 6, borderRadius: '50%' }}
               >
@@ -1244,9 +1244,9 @@ export default function PayrollPage() {
                   Select Payout Routing Channel:
                 </label>
                 <div style={{ display: 'flex', gap: 10 }}>
-                  
+
                   {/* CASH BUTTON */}
-                  <button 
+                  <button
                     type="button"
                     onClick={() => setSelectedMethod('Cash')}
                     style={{
@@ -1268,7 +1268,7 @@ export default function PayrollPage() {
 
                   {/* UPI BUTTON (Only 1 employee) */}
                   {checkoutCohort.length === 1 && (
-                    <button 
+                    <button
                       type="button"
                       onClick={() => setSelectedMethod('UPI')}
                       style={{
@@ -1290,7 +1290,7 @@ export default function PayrollPage() {
                   )}
 
                   {/* RAZORPAY BUTTON */}
-                  <button 
+                  <button
                     type="button"
                     onClick={() => setSelectedMethod('Razorpay')}
                     style={{
@@ -1311,7 +1311,7 @@ export default function PayrollPage() {
                   </button>
 
                   {/* BANK TRANSFER BUTTON */}
-                  <button 
+                  <button
                     type="button"
                     onClick={() => setSelectedMethod('Bank Transfer')}
                     style={{
@@ -1353,13 +1353,13 @@ export default function PayrollPage() {
                       {checkoutCohort[0].upiId || checkoutCohort[0].upiid || <span style={{ color: '#EF4444' }}>Missing UPI ID</span>}
                     </div>
                     {!(checkoutCohort[0].upiId || checkoutCohort[0].upiid) && (
-                      <button 
+                      <button
                         onClick={() => {
                           setShowCheckoutModal(false);
                           setSelectedEmployee(null);
                           navigate(`/admin/profile/${checkoutCohort[0].empId || checkoutCohort[0].EmpId}`);
                         }}
-                        className="btn" 
+                        className="btn"
                         style={{ background: '#FFF', color: '#EF4444', border: '1px solid #EF4444', fontSize: 11, padding: '4px 8px', marginTop: 4, width: 'fit-content' }}
                       >
                         Configure UPI ID on profile
@@ -1371,8 +1371,8 @@ export default function PayrollPage() {
                     <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-700)', display: 'block', marginBottom: 6 }}>
                       UPI Transaction / Ref Number:
                     </label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       placeholder="Enter Bank UPI Ref ID (e.g. 301294818290)"
                       value={transactionId}
                       onChange={e => setTransactionId(e.target.value)}
@@ -1412,7 +1412,7 @@ export default function PayrollPage() {
                                 {bank} • A/C: XXXX{acc.slice(-4)} • IFSC: {ifsc} • Holder: {holder}
                               </div>
                             ) : (
-                              <button 
+                              <button
                                 onClick={() => {
                                   setShowCheckoutModal(false);
                                   setSelectedEmployee(null);
@@ -1433,8 +1433,8 @@ export default function PayrollPage() {
                     <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-700)', display: 'block', marginBottom: 6 }}>
                       Transaction Ref ID / Reference Number:
                     </label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       placeholder="Enter Bank IMPS/NEFT/RTGS Transaction Ref ID"
                       value={transactionId}
                       onChange={e => setTransactionId(e.target.value)}
@@ -1473,7 +1473,7 @@ export default function PayrollPage() {
                                 {bank} • A/C: XXXX{acc.slice(-4)} • IFSC: {ifsc}
                               </div>
                             ) : (
-                              <button 
+                              <button
                                 onClick={() => {
                                   setShowCheckoutModal(false);
                                   setSelectedEmployee(null);
@@ -1494,16 +1494,16 @@ export default function PayrollPage() {
 
               {/* ACTIONS FOOTER */}
               <div style={{ display: 'flex', gap: 12 }}>
-                <button 
-                  className="btn btn-secondary" 
+                <button
+                  className="btn btn-secondary"
                   onClick={() => setShowCheckoutModal(false)}
                   disabled={paying || razorpayLoading || razorpaySimulating}
                   style={{ flex: 1, justifyContent: 'center' }}
                 >
                   Cancel
                 </button>
-                <button 
-                  className="btn btn-primary" 
+                <button
+                  className="btn btn-primary"
                   disabled={paying || razorpayLoading || razorpaySimulating || (selectedMethod === 'UPI' && !(checkoutCohort[0].upiId || checkoutCohort[0].upiid)) || (selectedMethod === 'Bank Transfer' && checkoutCohort.some(emp => { const acc = emp.accountNumber || emp.accountnumber || emp.AccountNumber; const bank = emp.bankName || emp.bankname || emp.BankName; const holder = emp.accountHolderName || emp.accountholdername || emp.AccountHolderName; const ifsc = emp.ifscCode || emp.ifsccode || emp.IfscCode; return !acc || !acc.trim() || !bank || !bank.trim() || !holder || !holder.trim() || !ifsc || !ifsc.trim(); }))}
                   onClick={executeCheckoutSubmit}
                   style={{
@@ -1599,9 +1599,9 @@ export default function PayrollPage() {
             justifyContent: 'flex-end',
             zIndex: 99999
           }}
-          onClick={() => setSelectedEmployee(null)}
+            onClick={() => setSelectedEmployee(null)}
           >
-            <div 
+            <div
               onClick={(e) => e.stopPropagation()}
               className="fade-in-right"
               style={{
@@ -1616,7 +1616,7 @@ export default function PayrollPage() {
                 overflowY: 'auto'
               }}
             >
-              
+
               {/* Header */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--gray-200)', paddingBottom: 16, marginBottom: 20 }}>
                 <div>
@@ -1648,13 +1648,13 @@ export default function PayrollPage() {
                 <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
                   {selectedEmployee.profileStatus === 'Complete' ? 'verified' : 'error'}
                 </span>
-                {selectedEmployee.profileStatus === 'Complete' 
-                  ? 'Complete Profile - Clean Attendance Sheet' 
+                {selectedEmployee.profileStatus === 'Complete'
+                  ? 'Complete Profile - Clean Attendance Sheet'
                   : 'Incomplete Profile - Performance Penalties Triggered'}
               </div>
 
               {/* Configure Bank Details Link for Admins */}
-              <button 
+              <button
                 onClick={() => {
                   setSelectedEmployee(null);
                   navigate(`/admin/profile/${selectedEmployee.empId || selectedEmployee.EmpId}`);
@@ -1684,17 +1684,17 @@ export default function PayrollPage() {
                 <div style={{ display: 'flex', gap: 8 }}>
                   <div style={{ position: 'relative', flex: 1 }}>
                     <span style={{ position: 'absolute', left: 10, top: 8, fontSize: 13, color: 'var(--gray-400)', fontWeight: 600 }}>₹</span>
-                    <input 
-                      type="number" 
+                    <input
+                      type="number"
                       value={customBasic}
                       onChange={e => setCustomBasic(e.target.value)}
                       style={{ padding: '8px 12px 8px 24px', width: '100%', borderRadius: 8, border: '1px solid var(--gray-300)', fontSize: 13 }}
                     />
                   </div>
-                  <button 
-                    onClick={handleUpdateBasicSalary} 
+                  <button
+                    onClick={handleUpdateBasicSalary}
                     disabled={savingBasic}
-                    className="btn btn-secondary" 
+                    className="btn btn-secondary"
                     style={{ fontSize: 12, padding: '8px 14px' }}
                   >
                     {savingBasic ? 'Saving...' : 'Update'}
@@ -1707,7 +1707,7 @@ export default function PayrollPage() {
 
               {/* Financial Breakdown Cohorts */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, marginBottom: 24 }}>
-                
+
                 {/* 1. Basic */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderBottom: '1px solid var(--gray-100)', paddingBottom: 8 }}>
                   <span style={{ color: 'var(--gray-600)', fontWeight: 600 }}>Employee Basic Salary</span>
@@ -1807,8 +1807,8 @@ export default function PayrollPage() {
                 </label>
                 <div style={{ position: 'relative' }}>
                   <span style={{ position: 'absolute', left: 10, top: 8, fontSize: 13, color: '#B45309', fontWeight: 600 }}>₹</span>
-                  <input 
-                    type="number" 
+                  <input
+                    type="number"
                     placeholder="Enter custom payout amount (leave empty for calculated)"
                     value={overrideAmount}
                     onChange={e => setOverrideAmount(e.target.value)}
@@ -1822,15 +1822,15 @@ export default function PayrollPage() {
 
               {/* Drawer Action Checkout Footer */}
               <div style={{ display: 'flex', gap: 12 }}>
-                <button 
-                  className="btn btn-secondary" 
+                <button
+                  className="btn btn-secondary"
                   onClick={() => setSelectedEmployee(null)}
                   style={{ flex: 1, justifyContent: 'center' }}
                 >
                   Cancel
                 </button>
-                <button 
-                  className="btn btn-primary" 
+                <button
+                  className="btn btn-primary"
                   disabled={paying || isPaid(selectedEmployee)}
                   onClick={() => triggerCheckout([selectedEmployee], overrideAmount, selectedEmployee.basic || selectedEmployee.Basic)}
                   style={{

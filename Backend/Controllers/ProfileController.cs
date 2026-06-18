@@ -213,6 +213,7 @@ public class ProfileController : ControllerBase
 
     // POST /api/Profile/documents
     [HttpPost("documents")]
+    [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadDocuments([FromForm] List<string> documentTypes,
                                                       [FromForm] List<string> documentNumbers,
                                                       List<IFormFile> files)

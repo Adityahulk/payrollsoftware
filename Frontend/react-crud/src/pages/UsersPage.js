@@ -45,7 +45,7 @@ export default function UsersPage() {
   const [warnReason, setWarnReason] = useState('');
   const [profileDrawerEmpId, setProfileDrawerEmpId] = useState(null);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
-  
+
   // Incentive States
   const [incentiveModal, setIncentiveModal] = useState(null);
   const [incentiveAmount, setIncentiveAmount] = useState('');
@@ -53,7 +53,7 @@ export default function UsersPage() {
   const [incentiveReason, setIncentiveReason] = useState('');
   const [incentiveMonth, setIncentiveMonth] = useState(new Date().getMonth() + 1);
   const [incentiveYear, setIncentiveYear] = useState(new Date().getFullYear());
-  
+
   // WFH States
   const [wfhModal, setWfhModal] = useState(null);
   const [wfhList, setWfhList] = useState([]);
@@ -146,7 +146,7 @@ export default function UsersPage() {
       if (q.trim().length >= 2) {
         // Search: Admin uses server-side search; others filter client-side
         if (isAdmin) {
-          usersApi.searchUsers(q).then(r => setUsers(formatUserData(r.data || []))).catch(() => {});
+          usersApi.searchUsers(q).then(r => setUsers(formatUserData(r.data || []))).catch(() => { });
         } else {
           // For non-admin, filtering is done client-side via the `filtered` memo below
         }
@@ -228,7 +228,7 @@ export default function UsersPage() {
     try {
       await usersApi.updateStatus(statusModal.empId, newStatus, newStatus === 'Inactive' ? statusReason : '');
       toast.success('Employee status updated.');
-    } catch { 
+    } catch {
       toast.error('Action failed.');
       // Reload using role-correct API on failure to revert optimistic update
       fetchUsers().then(r => {
@@ -574,10 +574,10 @@ export default function UsersPage() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Workspace *</label>
-                  <select 
-                    className="form-select" 
-                    required 
-                    value={newUser.spaceId} 
+                  <select
+                    className="form-select"
+                    required
+                    value={newUser.spaceId}
                     onChange={e => setNewUser(p => ({ ...p, spaceId: e.target.value }))}
                   >
                     <option value="">Select Workspace</option>
@@ -625,10 +625,10 @@ export default function UsersPage() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Workspace *</label>
-                  <select 
-                    className="form-select" 
-                    required 
-                    value={editUser.spaceId} 
+                  <select
+                    className="form-select"
+                    required
+                    value={editUser.spaceId}
                     onChange={e => setEditUser(p => ({ ...p, spaceId: e.target.value }))}
                   >
                     <option value="">Select Workspace</option>
@@ -703,12 +703,12 @@ export default function UsersPage() {
               <form onSubmit={handleGrantWfh} style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 20 }}>
                 <div className="form-group" style={{ flex: 1, margin: 0 }}>
                   <label className="form-label" style={{ marginBottom: 4 }}>Grant WFH for Date</label>
-                  <input 
-                    type="date" 
-                    className="form-input" 
-                    required 
-                    value={wfhDate} 
-                    onChange={e => setWfhDate(e.target.value)} 
+                  <input
+                    type="date"
+                    className="form-input"
+                    required
+                    value={wfhDate}
+                    onChange={e => setWfhDate(e.target.value)}
                   />
                 </div>
                 <button type="submit" className="btn btn-primary" style={{ height: 38, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -736,9 +736,9 @@ export default function UsersPage() {
                       return (
                         <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', borderBottom: idx < wfhList.filter(x => (x.empId ?? x.empid) === wfhModal.empId).length - 1 ? '1px solid var(--gray-100)' : 'none' }}>
                           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--gray-700)' }}>📅 {displayDate}</span>
-                          <button 
-                            type="button" 
-                            className="icon-btn" 
+                          <button
+                            type="button"
+                            className="icon-btn"
                             title="Revoke WFH Permit"
                             onClick={() => handleRevokeWfh(dStr.split('T')[0])}
                             style={{ color: '#EF4444', padding: 2 }}
@@ -809,7 +809,7 @@ export default function UsersPage() {
                       {['January', 'February', 'March', 'April', 'May', 'June',
                         'July', 'August', 'September', 'October', 'November', 'December'].map((m, i) => (
                           <option key={m} value={i + 1}>{m}</option>
-                      ))}
+                        ))}
                     </select>
                   </div>
                   <div style={{ width: 100 }}>

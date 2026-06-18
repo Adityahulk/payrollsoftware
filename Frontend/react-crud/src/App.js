@@ -11,25 +11,25 @@ import GlobalLoader from './components/GlobalLoader';
 import BackgroundMonitor from './components/BackgroundMonitor';
 
 // Lazy-loaded pages for code splitting
-const LoginPage       = lazy(() => import('./pages/LoginPage'));
-const LandingPage     = lazy(() => import('./pages/LandingPage'));
-const RegisterPage    = lazy(() => import('./pages/RegisterPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const LandingPage = lazy(() => import('./pages/LandingPage'));
+const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
-const AdminDashboard  = lazy(() => import('./pages/AdminDashboard'));
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const EmployeeDashboard = lazy(() => import('./pages/EmployeeDashboard'));
-const AttendancePage  = lazy(() => import('./pages/AttendancePage'));
-const SalaryPage      = lazy(() => import('./pages/SalaryPage'));
-const QueriesPage     = lazy(() => import('./pages/QueriesPage'));
-const UsersPage       = lazy(() => import('./pages/UsersPage'));
-const WorkLogsPage    = lazy(() => import('./pages/WorkLogsPage'));
-const SpacesPage      = lazy(() => import('./pages/SpacesPage'));
+const AttendancePage = lazy(() => import('./pages/AttendancePage'));
+const SalaryPage = lazy(() => import('./pages/SalaryPage'));
+const QueriesPage = lazy(() => import('./pages/QueriesPage'));
+const UsersPage = lazy(() => import('./pages/UsersPage'));
+const WorkLogsPage = lazy(() => import('./pages/WorkLogsPage'));
+const SpacesPage = lazy(() => import('./pages/SpacesPage'));
 const AllEmployeesPage = lazy(() => import('./pages/AllEmployeesPage'));
-const ProgressPage    = lazy(() => import('./pages/ProgressPage'));
-const ProjectsPage    = lazy(() => import('./pages/ProjectsPage'));
-const ProfilePage     = lazy(() => import('./pages/ProfilePage'));
-const PayrollPage     = lazy(() => import('./pages/PayrollPage'));
-const LeavePage       = lazy(() => import('./pages/LeavePage'));
-const ManageUsersPage  = lazy(() => import('./pages/ManageUsersPage'));
+const ProgressPage = lazy(() => import('./pages/ProgressPage'));
+const ProjectsPage = lazy(() => import('./pages/ProjectsPage'));
+const ProfilePage = lazy(() => import('./pages/ProfilePage'));
+const PayrollPage = lazy(() => import('./pages/PayrollPage'));
+const LeavePage = lazy(() => import('./pages/LeavePage'));
+const ManageUsersPage = lazy(() => import('./pages/ManageUsersPage'));
 const LiveMonitoringPage = lazy(() => import('./pages/LiveMonitoringPage'));
 const SuperAdminDashboard = lazy(() => import('./pages/SuperAdminDashboard'));
 const PayslipSettingsPage = lazy(() => import('./pages/PayslipSettingsPage'));
@@ -86,14 +86,14 @@ export default function App() {
                   boxShadow: '0 10px 32px rgba(0,0,0,0.2)',
                 },
                 success: { iconTheme: { primary: '#10B981', secondary: '#fff' } },
-                error:   { iconTheme: { primary: '#EF4444', secondary: '#fff' } },
+                error: { iconTheme: { primary: '#EF4444', secondary: '#fff' } },
               }}
             />
 
             <Suspense fallback={<PageLoader />}>
               <Routes>
                 {/* Public */}
-                <Route path="/login"    element={<LoginPage />} />
+                <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 

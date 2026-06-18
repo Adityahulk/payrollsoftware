@@ -35,6 +35,8 @@ builder.Services.AddCors(options =>
             policy.WithOrigins(
                 "http://localhost:3000",
                 "http://localhost:3001",
+                "http://127.0.0.1:3001",
+                "http://127.0.0.1:3000",
                 "https://payrollmicrotechnique.store",
                 "https://www.payrollmicrotechnique.store",
                 "http://payrollmicrotechnique.store",
@@ -64,6 +66,25 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "DefaultIssuer",
             ValidAudience = builder.Configuration["Jwt:Audience"] ?? "DefaultAudience",
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"] ?? "DefaultKeyForDevelopmentOnly"))
+        };
+
+        // ── SignalR WebSocket JWT support ──────────────────────────────────────────
+        // Browsers cannot send custom headers in WebSocket upgrades.
+        // SignalR passes the JWT as a query param (?access_token=...) instead.
+        // This handler extracts the token and sets it so the middleware can validate it.
+        options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                var path = context.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(accessToken) &&
+                    (path.StartsWithSegments("/hub/screenshare") || path.StartsWithSegments("/hub/notifications")))
+                {
+                    context.Token = accessToken;
+                }
+                return System.Threading.Tasks.Task.CompletedTask;
+            }
         };
 
         // ── SignalR WebSocket JWT support ──────────────────────────────────────────
@@ -1176,8 +1197,38 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHub<Backend.Hubs.NotificationHub>("/hub/notifications").RequireCors("AllowFrontend");
 app.MapHub<Backend.Hubs.ScreenShareHub>("/hub/screenshare").RequireCors("AllowFrontend");
+app.MapHub<Backend.Hubs.ScreenShareHub>("/hub/screenshare");
 
 app.Run();
+
+public class UtcDateTimeConverter : System.Text.Json.Serialization.JsonConverter<DateTime>
+{
+    public override DateTime Read(ref System.Text.Json.Utf8JsonReader reader, Type typeToConvert, System.Text.Json.JsonSerializerOptions options)
+    {
+        var str = reader.GetString();
+        if (string.IsNullOrEmpty(str)) return default;
+        return DateTime.Parse(str);
+    }
+
+    public override void Write(System.Text.Json.Utf8JsonWriter writer, DateTime value, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (value.TimeOfDay == TimeSpan.Zero && (value.Kind == DateTimeKind.Unspecified || value.Kind == DateTimeKind.Local))
+        {
+            writer.WriteStringValue(value.ToString("yyyy-MM-dd"));
+        }
+        else
+        {
+            if (value.Kind == DateTimeKind.Utc)
+            {
+                writer.WriteStringValue(value.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"));
+            }
+            else
+            {
+                writer.WriteStringValue(value.ToString("yyyy-MM-ddTHH:mm:ss.fff"));
+            }
+        }
+    }
+}
 
 public class UtcDateTimeConverter : System.Text.Json.Serialization.JsonConverter<DateTime>
 {

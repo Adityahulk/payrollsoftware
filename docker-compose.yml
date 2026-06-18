@@ -17,7 +17,7 @@ services:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d payroll_db"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d payroll_db" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -27,13 +27,14 @@ services:
       context: ./Backend
     container_name: payroll_backend_app
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       - ASPNETCORE_URLS=http://+:80
-      - ConnectionStrings__DefaultConnection=Host=payroll_postgres_db;Port=5432;Database=payroll_db;Username=postgres;Password=postgres
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=payroll_db;Username=postgres;Password=postgres
       - TZ=Asia/Kolkata
     ports:
-      - "5000:80"
+      - "5001:80"
     volumes:
       - ./Backend/wwwroot:/app/wwwroot
 

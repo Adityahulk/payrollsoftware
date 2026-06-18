@@ -220,6 +220,7 @@ public class AttendanceController : ControllerBase
         int targetEmpId = empId ?? 1;
         var data = await _attendanceService.GetTrendsAsync(targetEmpId);
         return Ok(data);
+<<<<<<< HEAD
     }
 
     [HttpGet("holidays")]
@@ -261,5 +262,7 @@ public class AttendanceController : ControllerBase
             return Ok(new { message = "Holiday deleted successfully." });
         }
         return BadRequest(new { message = "Failed to delete holiday." });
+=======
+>>>>>>> other-code
     }
 }

@@ -94,7 +94,7 @@ export default function ScreenShareViewer({ targetEmpId, targetEmpName, targetSp
 
             const handleVisibility = () => {
               if (!document.hidden && videoRef.current) {
-                videoRef.current.play().catch(() => {});
+                videoRef.current.play().catch(() => { });
               }
             };
             visibilityRef.current = handleVisibility;
@@ -208,7 +208,7 @@ export default function ScreenShareViewer({ targetEmpId, targetEmpName, targetSp
         peerConnectionRef.current = null;
       }
       if (connectionRef.current) {
-        connectionRef.current.invoke('LeaveRoom', spaceId).catch(() => {});
+        connectionRef.current.invoke('LeaveRoom', spaceId).catch(() => { });
         connectionRef.current.stop();
       }
       iceCandidateBuffer = [];

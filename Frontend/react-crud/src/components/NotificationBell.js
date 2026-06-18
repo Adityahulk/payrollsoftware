@@ -89,25 +89,25 @@ export default function NotificationBell() {
 
       if (role === 'Admin') {
         isRelevant = notification.toType === 'Notification' &&
-                     (targetRoles.includes('Admin') || targetRoles.includes('System')) &&
-                     notifSpaceId === spaceId;
+          (targetRoles.includes('Admin') || targetRoles.includes('System')) &&
+          notifSpaceId === spaceId;
       } else if (role === 'Manager') {
         isRelevant = notification.toType === 'Notification' &&
-                     targetRoles.includes('Manager') &&
-                     notifSpaceId === spaceId;
+          targetRoles.includes('Manager') &&
+          notifSpaceId === spaceId;
       } else if (role === 'TeamLead' || role === 'TL') {
         isRelevant = notification.toType === 'Notification' &&
-                     targetRoles.includes('TL') &&
-                     notifSpaceId === spaceId;
+          targetRoles.includes('TL') &&
+          notifSpaceId === spaceId;
       } else if (role === 'Employee') {
         // Employee gets warnings to them, space notices, query replies
         const toType = notification.toType || notification.ToType;
         const targetEmpId = notification.employeeId ?? notification.EmployeeId ?? 0;
         const queryCreatorId = notification.adminId ?? notification.AdminId ?? 0;
-        
+
         isRelevant = (toType === 'Warning' && targetEmpId === empId) ||
-                     (toType === 'Notice' && notifSpaceId === spaceId) ||
-                     (toType === 'Query' && queryCreatorId === empId && (notification.reply || notification.Reply));
+          (toType === 'Notice' && notifSpaceId === spaceId) ||
+          (toType === 'Query' && queryCreatorId === empId && (notification.reply || notification.Reply));
       }
 
       if (isRelevant) {

@@ -8,69 +8,69 @@ import toast from 'react-hot-toast';
 
 // Base employee nav items (shared by Employee, TeamLead, Manager)
 const EMPLOYEE_BASE_NAV = [
-  { path: '/employee',               icon: 'dashboard',       label: 'Dashboard' },
-  { path: '/employee/attendance',    icon: 'calendar_month',  label: 'Attendance' },
-  { path: '/employee/projects',      icon: 'folder_open',     label: 'Projects' },
-  { path: '/employee/worklogs',      icon: 'schedule',        label: 'Work Logs' },
-  { path: '/employee/salary',        icon: 'currency_rupee',  label: 'Payroll / CTC' },
-  { path: '/employee/progress',      icon: 'trending_up',     label: 'Progress Report' },
-  { path: '/employee/queries',       icon: 'help_center',     label: 'Queries' },
-  { path: '/employee/leaves',        icon: 'event_busy',      label: 'Leaves' },
-  { path: '/employee/profile',       icon: 'person',          label: 'Profile' },
+  { path: '/employee', icon: 'dashboard', label: 'Dashboard' },
+  { path: '/employee/attendance', icon: 'calendar_month', label: 'Attendance' },
+  { path: '/employee/projects', icon: 'folder_open', label: 'Projects' },
+  { path: '/employee/worklogs', icon: 'schedule', label: 'Work Logs' },
+  { path: '/employee/salary', icon: 'currency_rupee', label: 'Payroll / CTC' },
+  { path: '/employee/progress', icon: 'trending_up', label: 'Progress Report' },
+  { path: '/employee/queries', icon: 'help_center', label: 'Queries' },
+  { path: '/employee/leaves', icon: 'event_busy', label: 'Leaves' },
+  { path: '/employee/profile', icon: 'person', label: 'Profile' },
 ];
 
 // Extra items for TeamLead (after Dashboard)
 const TL_EXTRA_NAV = [
-  { path: '/employee/all-employees', icon: 'groups',          label: 'Team Members' },
-  { path: '/admin/attendance',       icon: 'event_available',  label: 'Team Attendance' },
-  { path: '/admin/live-monitoring',  icon: 'videocam',         label: 'Live Monitoring' },
+  { path: '/employee/all-employees', icon: 'groups', label: 'Team Members' },
+  { path: '/admin/attendance', icon: 'event_available', label: 'Team Attendance' },
+  { path: '/admin/live-monitoring', icon: 'videocam', label: 'Live Monitoring' },
 ];
 
 // Extra items for Manager (after Dashboard)
 // NOTE: Manager does NOT get /admin/users — that is Admin-only.
 // Manager sees the read-only employee directory at /employee/all-employees.
 const MANAGER_EXTRA_NAV = [
-  { path: '/employee/all-employees', icon: 'groups',          label: 'All Employees' },
-  { path: '/admin/attendance',       icon: 'event_available',  label: 'Employee Attendance' },
-  { path: '/employee/manage-users',  icon: 'manage_accounts',  label: 'Manage Employees' },
-  { path: '/admin/live-monitoring',  icon: 'videocam',         label: 'Live Monitoring' },
+  { path: '/employee/all-employees', icon: 'groups', label: 'All Employees' },
+  { path: '/admin/attendance', icon: 'event_available', label: 'Employee Attendance' },
+  { path: '/employee/manage-users', icon: 'manage_accounts', label: 'Manage Employees' },
+  { path: '/admin/live-monitoring', icon: 'videocam', label: 'Live Monitoring' },
 ];
 
 const NAV_ITEMS = {
   superadmin: [
-    { path: '/superadmin',         icon: 'admin_panel_settings', label: 'Governance' },
+    { path: '/superadmin', icon: 'admin_panel_settings', label: 'Governance' },
   ],
   admin: [
-    { path: '/admin',              icon: 'dashboard',        label: 'Dashboard' },
-    { path: '/admin/users',        icon: 'group',            label: 'Employee Mgmt' },
-    { path: '/admin/projects',     icon: 'folder_open',      label: 'Projects' },
-    { path: '/admin/attendance',   icon: 'event_available',  label: 'Attendance' },
-    { path: '/admin/progress',     icon: 'trending_up',      label: 'Progress Report' },
-    { path: '/admin/salary',       icon: 'payments',         label: 'Payroll / CTC' },
-    { path: '/admin/queries',      icon: 'contact_support',  label: 'Queries' },
-    { path: '/admin/leaves',       icon: 'event_busy',       label: 'Leaves' },
-    { path: '/admin/spaces',       icon: 'corporate_fare',   label: 'Spaces' },
-    { path: '/admin/live-monitoring', icon: 'videocam',      label: 'Live Monitoring' },
-    { path: '/admin/settings/payslip', icon: 'settings',     label: 'Payslip Settings' },
-    { path: '/admin/profile',      icon: 'person',           label: 'Profile' },
+    { path: '/admin', icon: 'dashboard', label: 'Dashboard' },
+    { path: '/admin/users', icon: 'group', label: 'Employee Mgmt' },
+    { path: '/admin/projects', icon: 'folder_open', label: 'Projects' },
+    { path: '/admin/attendance', icon: 'event_available', label: 'Attendance' },
+    { path: '/admin/progress', icon: 'trending_up', label: 'Progress Report' },
+    { path: '/admin/salary', icon: 'payments', label: 'Payroll / CTC' },
+    { path: '/admin/queries', icon: 'contact_support', label: 'Queries' },
+    { path: '/admin/leaves', icon: 'event_busy', label: 'Leaves' },
+    { path: '/admin/spaces', icon: 'corporate_fare', label: 'Spaces' },
+    { path: '/admin/live-monitoring', icon: 'videocam', label: 'Live Monitoring' },
+    { path: '/admin/settings/payslip', icon: 'settings', label: 'Payslip Settings' },
+    { path: '/admin/profile', icon: 'person', label: 'Profile' },
   ],
 };
 
 const BOTTOM_NAV = {
   superadmin: [
-    { path: '/superadmin',       icon: 'admin_panel_settings', label: 'Governance' },
+    { path: '/superadmin', icon: 'admin_panel_settings', label: 'Governance' },
   ],
   admin: [
-    { path: '/admin',            icon: 'dashboard',       label: 'Home' },
-    { path: '/admin/users',      icon: 'group',           label: 'Employees' },
-    { path: '/admin/salary',     icon: 'payments',        label: 'Payroll' },
-    { path: '/admin/queries',    icon: 'contact_support', label: 'Queries' },
+    { path: '/admin', icon: 'dashboard', label: 'Home' },
+    { path: '/admin/users', icon: 'group', label: 'Employees' },
+    { path: '/admin/salary', icon: 'payments', label: 'Payroll' },
+    { path: '/admin/queries', icon: 'contact_support', label: 'Queries' },
   ],
   employee: [
-    { path: '/employee',              icon: 'dashboard',      label: 'Home' },
-    { path: '/employee/attendance',   icon: 'calendar_month', label: 'Attendance' },
-    { path: '/employee/projects',     icon: 'folder_open',    label: 'Projects' },
-    { path: '/employee/profile',      icon: 'person',         label: 'Profile' },
+    { path: '/employee', icon: 'dashboard', label: 'Home' },
+    { path: '/employee/attendance', icon: 'calendar_month', label: 'Attendance' },
+    { path: '/employee/projects', icon: 'folder_open', label: 'Projects' },
+    { path: '/employee/profile', icon: 'person', label: 'Profile' },
   ],
 };
 
@@ -200,8 +200,8 @@ export default function AppLayout({ children, role = 'employee' }) {
       )}
 
       {/* ── Sidebar ────────────────────────────────────────────────────────────── */}
-      <aside 
-        className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''}`} 
+      <aside
+        className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''}`}
         aria-label="Main navigation"
       >
         {/* Brand */}
@@ -277,8 +277,8 @@ export default function AppLayout({ children, role = 'employee' }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {/* Three Dots Menu / Sidebar Toggle (⋮) */}
             <div style={{ position: 'relative' }} ref={dotsRef}>
-              <button 
-                className="icon-btn" 
+              <button
+                className="icon-btn"
                 onClick={() => {
                   if (window.innerWidth <= 1024) {
                     setSidebarOpen(prev => !prev);

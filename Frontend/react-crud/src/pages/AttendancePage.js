@@ -10,15 +10,15 @@ import toast from 'react-hot-toast';
 const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 const STATUS_STYLE = {
-  Present:   { bg: '#D1FAE5', color: '#065F46', dot: '#10B981', label: 'Present' },
-  Late:      { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B', label: 'Late' },
+  Present: { bg: '#D1FAE5', color: '#065F46', dot: '#10B981', label: 'Present' },
+  Late: { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B', label: 'Late' },
   EarlyExit: { bg: '#F3E8FF', color: '#6B21A8', dot: '#9333EA', label: 'Early Exit' },
-  Absent:    { bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444', label: 'Absent' },
-  Disabled:  { bg: '#F3F4F6', color: '#D1D5DB', dot: '#E5E7EB', label: 'Disabled' },
-  weekend:   { bg: '#F9FAFB', color: '#9CA3AF', dot: '#D1D5DB', label: 'Off Day' },
-  future:    { bg: '#fff',    color: '#D1D5DB', dot: 'transparent', label: 'Future' },
-  today:     { bg: '#EEF2FF', color: '#4338CA', dot: '#4F46E5', label: 'Today' },
-  Holiday:   { bg: '#E0F2FE', color: '#0369A1', dot: '#0284C7', label: 'Holiday' },
+  Absent: { bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444', label: 'Absent' },
+  Disabled: { bg: '#F3F4F6', color: '#D1D5DB', dot: '#E5E7EB', label: 'Disabled' },
+  weekend: { bg: '#F9FAFB', color: '#9CA3AF', dot: '#D1D5DB', label: 'Off Day' },
+  future: { bg: '#fff', color: '#D1D5DB', dot: 'transparent', label: 'Future' },
+  today: { bg: '#EEF2FF', color: '#4338CA', dot: '#4F46E5', label: 'Today' },
+  Holiday: { bg: '#E0F2FE', color: '#0369A1', dot: '#0284C7', label: 'Holiday' },
 };
 
 const LEGEND = [
@@ -102,7 +102,7 @@ export default function AttendancePage({ isAdmin }) {
         ]);
         let usersData = Array.isArray(usersRes.data) ? usersRes.data : [];
         let attData = Array.isArray(attRes.data) ? attRes.data : [];
-        
+
         if (user?.role !== 'Admin') {
           const mySpaceId = user?.spaceId || user?.SpaceId;
           if (mySpaceId !== undefined && mySpaceId !== null) {
@@ -111,10 +111,10 @@ export default function AttendancePage({ isAdmin }) {
             attData = attData.filter(a => userIdsInSpace.has(Number(a.empId || a.empid)));
           }
         }
-        
+
         setAllUsers(usersData);
         setAllAttendance(attData);
-        
+
         const employees = usersData.filter(u => (u.role || '').toLowerCase() !== 'superadmin');
         if (employees.length > 0) {
           const ownId = user?.empId || user?.id;
@@ -312,8 +312,8 @@ export default function AttendancePage({ isAdmin }) {
   }, [presentTodayRecords]);
 
   const filteredEmployees = useMemo(() => {
-    return employees.filter(emp => 
-      (emp.name || '').toLowerCase().includes(listSearch.toLowerCase()) || 
+    return employees.filter(emp =>
+      (emp.name || '').toLowerCase().includes(listSearch.toLowerCase()) ||
       (emp.email || '').toLowerCase().includes(listSearch.toLowerCase())
     );
   }, [employees, listSearch]);
@@ -375,13 +375,13 @@ export default function AttendancePage({ isAdmin }) {
     }
 
     if (d > todayMid) return 'future';
-    
+
     // Check holiday first
     const isHoliday = holidays.some(h => toDateKey(h.holidayDate || h.holidaydate) === key);
     if (isHoliday) return 'Holiday';
 
     const isToday = d.getTime() === todayMid.getTime();
-    
+
     const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const dayName = DAYS_SHORT[d.getDay()];
     const isWorking = workingDays.some(w => w.toLowerCase() === dayName.toLowerCase());
@@ -419,7 +419,7 @@ export default function AttendancePage({ isAdmin }) {
     }
 
     if (d > todayMid) return 'future';
-    
+
     // Check holiday first
     const isHoliday = holidays.some(h => toDateKey(h.holidayDate || h.holidaydate) === key);
     if (isHoliday) return 'Holiday';
@@ -470,7 +470,7 @@ export default function AttendancePage({ isAdmin }) {
     }
 
     if (d > todayMid) return 'future';
-    
+
     // Check holiday first
     const isHoliday = holidays.some(h => toDateKey(h.holidayDate || h.holidaydate) === key);
     if (isHoliday) return 'Holiday';
@@ -506,8 +506,8 @@ export default function AttendancePage({ isAdmin }) {
     const selectedDateKey = selectedDay ? toDateKey(selectedDay) : null;
     const spotlightDay = activeActivities.find(act => toDateKey(act.date) === selectedDateKey);
 
-    const formattedSpotlightDate = selectedDay 
-      ? selectedDay.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) 
+    const formattedSpotlightDate = selectedDay
+      ? selectedDay.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
       : '';
 
     // Filter by month
@@ -521,8 +521,8 @@ export default function AttendancePage({ isAdmin }) {
     const filteredActivities = monthlyActivities.filter(act => {
       if (!query) return true;
       const formattedDate = new Date(act.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }).toLowerCase();
-      const hasTask = act.worklogs?.some(w => 
-        (w.taskName || '').toLowerCase().includes(query) || 
+      const hasTask = act.worklogs?.some(w =>
+        (w.taskName || '').toLowerCase().includes(query) ||
         (w.description || '').toLowerCase().includes(query)
       );
       return formattedDate.includes(query) || hasTask;
@@ -532,8 +532,8 @@ export default function AttendancePage({ isAdmin }) {
     const sortedActivities = [...filteredActivities].sort((a, b) => new Date(b.date) - new Date(a.date));
 
     // Get Spotlight day status style
-    const spotlightStatus = spotlightDay 
-      ? getActivityStatus(spotlightDay.date, spotlightDay.totalHours, spotlightDay.clockIn, spotlightDay.clockOut) 
+    const spotlightStatus = spotlightDay
+      ? getActivityStatus(spotlightDay.date, spotlightDay.totalHours, spotlightDay.clockIn, spotlightDay.clockOut)
       : 'Absent';
     const spotlightStyle = STATUS_STYLE[spotlightStatus] || STATUS_STYLE.future;
 
@@ -631,7 +631,7 @@ export default function AttendancePage({ isAdmin }) {
         `}</style>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: 24, alignItems: 'flex-start' }}>
-          
+
           {/* Left Column: Spotlight details of the selected day */}
           <div className="spotlight-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--gray-100)', paddingBottom: 16, marginBottom: 20 }}>
@@ -716,11 +716,11 @@ export default function AttendancePage({ isAdmin }) {
             <div style={{ borderBottom: '1px solid var(--gray-100)', paddingBottom: 16, marginBottom: 16 }}>
               <h3 style={{ fontSize: 16, fontWeight: 800, color: 'var(--gray-900)', margin: 0 }}>Monthly Activities & Worklogs</h3>
               <p style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 4, marginBottom: 12 }}>Timeline of logs for {monthName}</p>
-              
+
               {/* Search Box */}
               <div style={{ position: 'relative', width: '100%' }}>
                 <span className="material-symbols-outlined" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--gray-400)', fontSize: 18 }}>search</span>
-                <input 
+                <input
                   type="text"
                   placeholder="Search worklogs or dates..."
                   className="search-input-timeline"
@@ -728,7 +728,7 @@ export default function AttendancePage({ isAdmin }) {
                   onChange={(e) => setActivitySearch(e.target.value)}
                 />
                 {activitySearch && (
-                  <button 
+                  <button
                     onClick={() => setActivitySearch('')}
                     style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gray-400)' }}
                   >
@@ -760,11 +760,11 @@ export default function AttendancePage({ isAdmin }) {
                     <div key={idx} className="timeline-item-container">
                       {/* Vertical line connecting nodes */}
                       <div className="timeline-track-line" />
-                      
+
                       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
                         {/* Timeline Bullet Node */}
                         <div style={{
-                          width: 14, height: 14, borderRadius: '50%', 
+                          width: 14, height: 14, borderRadius: '50%',
                           background: s.dot, border: '3.5px solid #fff',
                           boxShadow: '0 0 0 1.5px ' + s.dot,
                           marginTop: 20, marginLeft: 14, flexShrink: 0,
@@ -772,7 +772,7 @@ export default function AttendancePage({ isAdmin }) {
                         }} />
 
                         {/* Interactive Timeline Card */}
-                        <div 
+                        <div
                           className={`timeline-card ${isActive ? 'active' : ''}`}
                           onClick={() => setSelectedDay(new Date(day.date))}
                           style={{ flex: 1 }}
@@ -787,7 +787,7 @@ export default function AttendancePage({ isAdmin }) {
                                 </span>
                               </div>
                             </div>
-                            
+
                             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                               {day.totalHours > 0 && (
                                 <span className="badge badge-success" style={{ fontSize: 10, padding: '2px 6px', fontWeight: 600 }}>
@@ -863,8 +863,8 @@ export default function AttendancePage({ isAdmin }) {
   };
 
   const renderAdminView = () => {
-    const filteredSearchUsers = employees.filter(emp => 
-      (emp.name || '').toLowerCase().includes(selectSearch.toLowerCase()) || 
+    const filteredSearchUsers = employees.filter(emp =>
+      (emp.name || '').toLowerCase().includes(selectSearch.toLowerCase()) ||
       (emp.email || '').toLowerCase().includes(selectSearch.toLowerCase())
     );
 
@@ -882,15 +882,15 @@ export default function AttendancePage({ isAdmin }) {
           <div style={{ display: 'grid', gridTemplateColumns: '7.2fr 2.8fr', gap: 24, alignItems: 'flex-start' }}>
             {/* Left side (70%): Calendar and detailed activities */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-              
+
               {loadingSelectedEmp ? <CalendarSkeleton /> : (
                 <>
                   {/* Selected employee Stats */}
                   <div className="grid grid-4" style={{ gap: 12 }}>
                     {[
-                      { label: 'Present',    value: selectedStats.presentCount,   sub: 'days', color: '#059669', bg: '#D1FAE5', icon: 'check_circle' },
-                      { label: 'Absent',     value: selectedStats.absentCount,    sub: 'days', color: '#DC2626', bg: '#FEE2E2', icon: 'cancel' },
-                      { label: 'Late',       value: selectedStats.lateCount,      sub: 'days', color: '#D97706', bg: '#FEF3C7', icon: 'schedule' },
+                      { label: 'Present', value: selectedStats.presentCount, sub: 'days', color: '#059669', bg: '#D1FAE5', icon: 'check_circle' },
+                      { label: 'Absent', value: selectedStats.absentCount, sub: 'days', color: '#DC2626', bg: '#FEE2E2', icon: 'cancel' },
+                      { label: 'Late', value: selectedStats.lateCount, sub: 'days', color: '#D97706', bg: '#FEF3C7', icon: 'schedule' },
                       { label: 'Early Exit', value: selectedStats.earlyExitCount, sub: 'days', color: '#7C3AED', bg: '#F3E8FF', icon: 'directions_run' },
                     ].map(c => (
                       <div key={c.label} className="stat-card" style={{ padding: 14 }}>
@@ -990,17 +990,17 @@ export default function AttendancePage({ isAdmin }) {
 
             {/* Right side (30%): Search, Roll Call, Holidays Sidebar */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              
+
               {/* Employee Selector Card */}
               <div className="card" style={{ padding: 18 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--gray-600)' }}>Active Profile Spotlight</span>
-                  
+
                   {/* Search select dropdown */}
                   <div style={{ position: 'relative', width: '100%' }}>
                     <div style={{ display: 'flex', alignItems: 'center', background: 'var(--gray-100)', border: '1.5px solid var(--gray-200)', borderRadius: 'var(--radius-md)', padding: '0 10px' }}>
                       <span className="material-symbols-outlined" style={{ color: 'var(--gray-400)', marginRight: 6, fontSize: 18 }}>search</span>
-                      <input 
+                      <input
                         type="text"
                         placeholder="Search employee..."
                         value={selectSearch}
@@ -1012,7 +1012,7 @@ export default function AttendancePage({ isAdmin }) {
                         style={{ border: 'none', padding: '10px 0', outline: 'none', fontSize: 13, width: '100%', background: 'transparent' }}
                       />
                       {selectSearch && (
-                        <button 
+                        <button
                           onClick={() => { setSelectSearch(''); setSearchDropdownOpen(false); }}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gray-400)' }}
                         >
@@ -1028,15 +1028,15 @@ export default function AttendancePage({ isAdmin }) {
                         zIndex: 310, maxHeight: 220, overflowY: 'auto', marginTop: 4
                       }}>
                         {filteredSearchUsers.map(emp => (
-                          <div 
+                          <div
                             key={emp.empId || emp.id}
                             onClick={() => {
                               setSelectedEmpId(emp.empId || emp.id);
                               setSelectSearch(emp.name || emp.email);
                               setSearchDropdownOpen(false);
                             }}
-                            style={{ 
-                              padding: '10px 14px', cursor: 'pointer', 
+                            style={{
+                              padding: '10px 14px', cursor: 'pointer',
                               borderBottom: '1px solid var(--gray-100)',
                               display: 'flex', alignItems: 'center', gap: 10,
                               transition: 'background 0.1s'
@@ -1054,7 +1054,7 @@ export default function AttendancePage({ isAdmin }) {
                       </div>
                     )}
                   </div>
-                  
+
                   {activeEmployee && (
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: 'var(--primary-50)', padding: '10px 12px', borderRadius: 8 }}>
                       <div className="avatar" style={{ width: 32, height: 32, fontSize: 12 }}>{getInitials(activeEmployee.name || activeEmployee.email)}</div>
@@ -1070,7 +1070,7 @@ export default function AttendancePage({ isAdmin }) {
               {/* Main Sidebar Widget (Tabs: Today's Roll Call vs Holidays) */}
               <div className="card" style={{ padding: 0, overflow: 'hidden', minHeight: 450, display: 'flex', flexDirection: 'column', background: '#fff' }}>
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--gray-200)', background: 'var(--gray-50)' }}>
-                  <button 
+                  <button
                     onClick={() => setRightTab('rollcall')}
                     style={{
                       flex: 1, padding: '12px 0', border: 'none', background: 'none', cursor: 'pointer',
@@ -1081,7 +1081,7 @@ export default function AttendancePage({ isAdmin }) {
                   >
                     Today's Roll Call
                   </button>
-                  <button 
+                  <button
                     onClick={() => setRightTab('holidays')}
                     style={{
                       flex: 1, padding: '12px 0', border: 'none', background: 'none', cursor: 'pointer',
@@ -1100,7 +1100,7 @@ export default function AttendancePage({ isAdmin }) {
                       {/* Search / Filter */}
                       <div style={{ display: 'flex', alignItems: 'center', background: 'var(--gray-100)', border: '1px solid var(--gray-200)', borderRadius: 'var(--radius-md)', padding: '6px 12px', marginBottom: 12 }}>
                         <span className="material-symbols-outlined" style={{ color: 'var(--gray-400)', marginRight: 6, fontSize: 18 }}>search</span>
-                        <input 
+                        <input
                           type="text"
                           placeholder="Filter roll call..."
                           value={listSearch}
@@ -1111,7 +1111,7 @@ export default function AttendancePage({ isAdmin }) {
 
                       {/* Sub-tabs: Present Today vs Not Present */}
                       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-                        <button 
+                        <button
                           onClick={() => setRollCallTab('present')}
                           className="btn btn-sm"
                           style={{
@@ -1123,7 +1123,7 @@ export default function AttendancePage({ isAdmin }) {
                         >
                           Present ({presentTodayList.length})
                         </button>
-                        <button 
+                        <button
                           onClick={() => setRollCallTab('absent')}
                           className="btn btn-sm"
                           style={{
@@ -1147,7 +1147,7 @@ export default function AttendancePage({ isAdmin }) {
                               const isActive = Number(selectedEmpId) === Number(emp.empId || emp.id);
                               const clockInTime = getClockInTimeForEmployee(emp);
                               return (
-                                <div 
+                                <div
                                   key={emp.empId || emp.id}
                                   onClick={() => setSelectedEmpId(emp.empId || emp.id)}
                                   style={{
@@ -1179,7 +1179,7 @@ export default function AttendancePage({ isAdmin }) {
                             absentTodayList.map(emp => {
                               const isActive = Number(selectedEmpId) === Number(emp.empId || emp.id);
                               return (
-                                <div 
+                                <div
                                   key={emp.empId || emp.id}
                                   onClick={() => setSelectedEmpId(emp.empId || emp.id)}
                                   style={{
@@ -1225,9 +1225,9 @@ export default function AttendancePage({ isAdmin }) {
                                   </div>
                                 </div>
                                 {user?.role === 'Admin' && (
-                                  <button 
+                                  <button
                                     onClick={() => handleDeleteHoliday(h.holidayId || h.holidayid)}
-                                    className="icon-btn" 
+                                    className="icon-btn"
                                     style={{ padding: 4, color: 'var(--danger)', cursor: 'pointer', background: 'none', border: 'none' }}
                                     title="Delete Holiday"
                                   >
@@ -1244,25 +1244,25 @@ export default function AttendancePage({ isAdmin }) {
                       {user?.role === 'Admin' && (
                         <form onSubmit={handleAddHoliday} style={{ borderTop: '1px solid var(--gray-200)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                           <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--gray-600)', textTransform: 'uppercase' }}>Add Holiday</span>
-                          <input 
-                            type="date" 
-                            className="form-control" 
-                            style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }} 
-                            value={newHoliday.date} 
+                          <input
+                            type="date"
+                            className="form-control"
+                            style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}
+                            value={newHoliday.date}
                             onChange={(e) => setNewHoliday(prev => ({ ...prev, date: e.target.value }))}
                             required
                           />
-                          <input 
-                            type="text" 
-                            placeholder="Holiday Name (e.g. Christmas)" 
-                            className="form-control" 
-                            style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }} 
-                            value={newHoliday.name} 
+                          <input
+                            type="text"
+                            placeholder="Holiday Name (e.g. Christmas)"
+                            className="form-control"
+                            style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}
+                            value={newHoliday.name}
                             onChange={(e) => setNewHoliday(prev => ({ ...prev, name: e.target.value }))}
                             required
                           />
-                          <select 
-                            className="form-control" 
+                          <select
+                            className="form-control"
                             style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}
                             value={newHoliday.type}
                             onChange={(e) => setNewHoliday(prev => ({ ...prev, type: e.target.value }))}
@@ -1271,9 +1271,9 @@ export default function AttendancePage({ isAdmin }) {
                             <option value="Regional Holiday">Regional Holiday</option>
                             <option value="Company Holiday">Company Holiday</option>
                           </select>
-                          <button 
-                            type="submit" 
-                            className="btn btn-primary btn-sm" 
+                          <button
+                            type="submit"
+                            className="btn btn-primary btn-sm"
                             style={{ fontSize: 12, padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
                             disabled={addingHoliday}
                           >
@@ -1365,9 +1365,9 @@ export default function AttendancePage({ isAdmin }) {
           {/* Stats – dynamic, no hardcoded values */}
           <div className="grid grid-4" style={{ marginBottom: 24 }}>
             {[
-              { label: 'Present',    value: stats.presentCount,   sub: 'days', color: '#059669', bg: '#D1FAE5', icon: 'check_circle' },
-              { label: 'Absent',     value: stats.absentCount,    sub: 'days', color: '#DC2626', bg: '#FEE2E2', icon: 'cancel' },
-              { label: 'Late',       value: stats.lateCount,      sub: 'days', color: '#D97706', bg: '#FEF3C7', icon: 'schedule' },
+              { label: 'Present', value: stats.presentCount, sub: 'days', color: '#059669', bg: '#D1FAE5', icon: 'check_circle' },
+              { label: 'Absent', value: stats.absentCount, sub: 'days', color: '#DC2626', bg: '#FEE2E2', icon: 'cancel' },
+              { label: 'Late', value: stats.lateCount, sub: 'days', color: '#D97706', bg: '#FEF3C7', icon: 'schedule' },
               { label: 'Early Exit', value: stats.earlyExitCount, sub: 'days', color: '#7C3AED', bg: '#F3E8FF', icon: 'directions_run' },
             ].map(c => (
               <div key={c.label} className="stat-card">

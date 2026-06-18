@@ -10,14 +10,14 @@ import { BACKEND_ORIGIN } from '../config';
 
 function StatusBadge({ status }) {
   const map = {
-    'Completed':  { bg: '#D1FAE5', color: '#065F46' },
-    'Complete':   { bg: '#D1FAE5', color: '#065F46' },
-    'Resolve':    { bg: '#D1FAE5', color: '#065F46' },
+    'Completed': { bg: '#D1FAE5', color: '#065F46' },
+    'Complete': { bg: '#D1FAE5', color: '#065F46' },
+    'Resolve': { bg: '#D1FAE5', color: '#065F46' },
     'InProgress': { bg: '#DBEAFE', color: '#1D4ED8' },
-    'In Progress':{ bg: '#DBEAFE', color: '#1D4ED8' },
-    'Active':     { bg: '#DBEAFE', color: '#1D4ED8' },
-    'Pending':    { bg: '#FEF3C7', color: '#92400E' },
-    'Todo':       { bg: '#F3F4F6', color: '#374151' },
+    'In Progress': { bg: '#DBEAFE', color: '#1D4ED8' },
+    'Active': { bg: '#DBEAFE', color: '#1D4ED8' },
+    'Pending': { bg: '#FEF3C7', color: '#92400E' },
+    'Todo': { bg: '#F3F4F6', color: '#374151' },
   };
   const s = map[status] || map['Todo'];
   return (
@@ -51,7 +51,7 @@ const parseLinkString = (linkStr) => {
 
 const renderLinksSection = (linksArray, title, icon) => {
   if (!linksArray || linksArray.length === 0) return null;
-  
+
   const validLinks = linksArray
     .map(parseLinkString)
     .filter(l => l && l.name && l.url);
@@ -145,7 +145,7 @@ function CreateProjectModal({ onClose, onCreated, teamMembers }) {
     const serializedLinks = links
       .filter(l => l.name.trim() && l.url.trim())
       .map(l => `${l.name.trim()}|${l.url.trim()}`);
-      
+
     const serializedDocLinks = docLinks
       .filter(l => l.name.trim() && l.url.trim())
       .map(l => `${l.name.trim()}|${l.url.trim()}`);
@@ -411,7 +411,7 @@ function EditProjectModal({ project, onClose, onUpdated }) {
     const serializedLinks = links
       .filter(l => l.name.trim() && l.url.trim())
       .map(l => `${l.name.trim()}|${l.url.trim()}`);
-      
+
     const serializedDocLinks = docLinks
       .filter(l => l.name.trim() && l.url.trim())
       .map(l => `${l.name.trim()}|${l.url.trim()}`);
@@ -787,10 +787,10 @@ function TaskCard({ task, isMyTask, onStatusChange, canUpdateStatus, canManage, 
 
   const cycleStatus = async () => {
     if (!canUpdateStatus || updatingStatus) return;
-    const next = { 
-      'Pending': 'Active', 
-      'Active': 'Resolve', 
-      'Resolve': 'Complete', 
+    const next = {
+      'Pending': 'Active',
+      'Active': 'Resolve',
+      'Resolve': 'Complete',
       'Complete': 'Pending',
       'InProgress': 'Active',
       'Completed': 'Complete',
@@ -996,9 +996,9 @@ export default function ProjectsPage() {
     if (!canManage && !isManager) return;
     try {
       const r = await teamApi.getTeamMembers();
-      const members = (r.data || []).filter(m => 
-        m.status?.toLowerCase() === 'active' && 
-        (m.role || '').toLowerCase() !== 'admin' && 
+      const members = (r.data || []).filter(m =>
+        m.status?.toLowerCase() === 'active' &&
+        (m.role || '').toLowerCase() !== 'admin' &&
         (m.role || '').toLowerCase() !== 'superadmin'
       );
       setTeamMembers(members);
@@ -1067,16 +1067,16 @@ export default function ProjectsPage() {
   function TabBar() {
     const tabs = canManage
       ? [
-          { id: 'myProjects', label: 'Company Projects', icon: 'folder' },
-          { id: 'allTasks', label: 'All Assigned Tasks', icon: 'task_alt' },
-          { id: 'myWork', label: 'My Work', icon: 'person' },
-        ]
+        { id: 'myProjects', label: 'Company Projects', icon: 'folder' },
+        { id: 'allTasks', label: 'All Assigned Tasks', icon: 'task_alt' },
+        { id: 'myWork', label: 'My Work', icon: 'person' },
+      ]
       : isManager
-      ? [
+        ? [
           { id: 'myProjects', label: 'Company Projects', icon: 'folder' },
           { id: 'myWork', label: 'My Assigned Tasks', icon: 'person' },
         ]
-      : [
+        : [
           { id: 'myProjects', label: 'Company Projects', icon: 'folder' },
           { id: 'myWork', label: 'My Tasks', icon: 'task_alt' },
         ];
@@ -1179,8 +1179,8 @@ export default function ProjectsPage() {
               {canManage
                 ? 'Create projects, assign tasks to your team members'
                 : isManager
-                ? 'View all projects and team progress (read-only)'
-                : 'Projects assigned to you and your tasks'}
+                  ? 'View all projects and team progress (read-only)'
+                  : 'Projects assigned to you and your tasks'}
             </p>
           </div>
           {canManage && (

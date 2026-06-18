@@ -287,7 +287,7 @@ export default function EmployeeDashboard() {
   const isManager = role === 'Manager';
   const [attendance, setAttendance] = useState([]);
   const [dateOfJoining, setDateOfJoining] = useState(null);
-  const [spaceWorkingDays, setSpaceWorkingDays] = useState(['Mon','Tue','Wed','Thu','Fri']);
+  const [spaceWorkingDays, setSpaceWorkingDays] = useState(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
   const [queries, setQueries] = useState([]);
   const [loading] = useState(false);
   const [clockStatus, setClockStatus] = useState('idle');
@@ -406,21 +406,21 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     // Load Analytics
     if (user?.empId) {
-      analyticsApi.getProductivity().then(r => setProductivityData(r.data)).catch(() => {});
-      analyticsApi.getPerformanceGrade().then(r => setPerformance(r.data)).catch(() => {});
+      analyticsApi.getProductivity().then(r => setProductivityData(r.data)).catch(() => { });
+      analyticsApi.getPerformanceGrade().then(r => setPerformance(r.data)).catch(() => { });
     }
 
     // TL: load their project count
     if (isTL) {
       projectsApi.getMyProjects()
         .then(r => setMyProjectsCount((r.data || []).length))
-        .catch(() => {});
+        .catch(() => { });
     }
 
     // Load leave data
     leavesApi.getMyLeaves()
       .then(r => setMyLeaves(r.data || []))
-      .catch(() => {});
+      .catch(() => { });
 
     return () => clearTimeout(timerRef.current);
   }, [user?.empId, isTL]);
@@ -819,16 +819,16 @@ export default function EmployeeDashboard() {
             </div>
 
             <div className="card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                  <h3 style={{ fontSize: 15, fontWeight: 700 }}>Working Hours (Week)</h3>
-                  <span className="badge badge-primary">Real-time</span>
-                </div>
-                <div style={{ fontSize: 32, fontWeight: 800 }}>
-                  {Number(productivityData.totalHours).toFixed(0)}<span style={{ fontSize: 16, opacity: 0.6, fontWeight: 500 }}> / {Number(productivityData.expectedHours).toFixed(0)} hrs</span>
-                </div>
-                <div className="progress-bar" style={{ marginTop: 16, height: 10 }}>
-                  <div className="progress-fill" style={{ width: `${Math.min(productivityData.worklogScore, 100)}%`, background: 'var(--primary-500)' }} />
-                </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 700 }}>Working Hours (Week)</h3>
+                <span className="badge badge-primary">Real-time</span>
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 800 }}>
+                {Number(productivityData.totalHours).toFixed(0)}<span style={{ fontSize: 16, opacity: 0.6, fontWeight: 500 }}> / {Number(productivityData.expectedHours).toFixed(0)} hrs</span>
+              </div>
+              <div className="progress-bar" style={{ marginTop: 16, height: 10 }}>
+                <div className="progress-fill" style={{ width: `${Math.min(productivityData.worklogScore, 100)}%`, background: 'var(--primary-500)' }} />
+              </div>
             </div>
           </div>
         )}
@@ -841,9 +841,9 @@ export default function EmployeeDashboard() {
             <h3 style={{ fontSize: 15, fontWeight: 700 }}>Working Logs</h3>
             <div style={{ display: 'flex', gap: 4, background: 'var(--gray-100)', padding: 4, borderRadius: 8 }}>
               {['weekly', 'monthly', '6months'].map(v => (
-                <button key={v} onClick={() => setWorklogRange(v)} style={{ 
-                  padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', 
-                  background: worklogRange === v ? '#fff' : 'transparent', 
+                <button key={v} onClick={() => setWorklogRange(v)} style={{
+                  padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none',
+                  background: worklogRange === v ? '#fff' : 'transparent',
                   color: worklogRange === v ? 'var(--primary-600)' : 'var(--gray-600)',
                   borderRadius: 6, cursor: 'pointer', boxShadow: worklogRange === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
                   transition: 'all 0.2s'

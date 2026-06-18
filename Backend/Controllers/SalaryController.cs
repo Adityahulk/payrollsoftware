@@ -28,9 +28,11 @@ public class SalaryController : ControllerBase
 
     private int GetSpaceId()
     {
-        // All roles (including Admin) read SpaceId from the JWT claim.
-        // Admin's SpaceId is their primary space (first space they own),
-        // set during login by the AuthController.
+        var role = GetRole();
+        if (role == "Admin")
+        {
+            return GetEmpId();
+        }
         var claim = User.FindFirst("SpaceId")?.Value;
         return int.TryParse(claim, out var id) ? id : 0;
     }
