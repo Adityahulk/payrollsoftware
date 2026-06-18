@@ -220,7 +220,6 @@ public class AttendanceController : ControllerBase
         int targetEmpId = empId ?? 1;
         var data = await _attendanceService.GetTrendsAsync(targetEmpId);
         return Ok(data);
-<<<<<<< HEAD
     }
 
     [HttpGet("holidays")]
@@ -247,22 +246,5 @@ public class AttendanceController : ControllerBase
             return Ok(new { message = "Holiday added successfully." });
         }
         return BadRequest(new { message = "Failed to add holiday." });
-    }
-
-    [HttpDelete("holidays/{holidayId}")]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> DeleteHoliday(int holidayId)
-    {
-        var spaceId = GetSpaceId();
-        if (spaceId == 0) return BadRequest(new { message = "Invalid space context." });
-        
-        var result = await _attendanceService.DeleteHolidayAsync(holidayId, spaceId);
-        if (result)
-        {
-            return Ok(new { message = "Holiday deleted successfully." });
-        }
-        return BadRequest(new { message = "Failed to delete holiday." });
-=======
->>>>>>> other-code
     }
 }
