@@ -6,184 +6,179 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Linq;
-using Dapper;
-using Microsoft.Extensions.DependencyInjection;
 using Backend.Models;
-using Backend.Repositories;
+using Backend.Services;
+using System.Security.Claims;
 
 [ApiController]
 [Route("api/spaces")]
 public class SpaceController : ControllerBase
 {
-    private readonly ISpaceRepository _spaceRepository;
-    private readonly IUserRepository _userRepository;
+    private readonly ISpaceService _spaceService;
+    private readonly IUserService _userService;
+    private readonly ISalaryService _salaryService;
     private readonly IConfiguration _configuration;
-    private readonly ISalaryRepository _salaryRepository;
 
-    public SpaceController(ISpaceRepository spaceRepository, IUserRepository userRepository, IConfiguration configuration, ISalaryRepository salaryRepository)
+    public SpaceController(
+        ISpaceService spaceService, 
+        IUserService userService, 
+        ISalaryService salaryService,
+        IConfiguration configuration)
     {
-        _spaceRepository = spaceRepository;
-        _userRepository = userRepository;
+        _spaceService = spaceService;
+        _userService = userService;
+        _salaryService = salaryService;
         _configuration = configuration;
-        _salaryRepository = salaryRepository;
     }
 
-    /// <summary>
-    /// Resolves the logged-in employee ID from JWT claims.
-    /// </summary>
-    private async Task<int?> ResolveEmpIdAsync()
+    private int GetEmpId()
     {
-        var empIdClaim = User.FindFirst("EmpId")?.Value 
-                         ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-                         ?? User.FindFirst("nameid")?.Value;
-
-        if (string.IsNullOrEmpty(empIdClaim))
-            return null;
-
-        if (int.TryParse(empIdClaim, out int empId))
-            return empId;
-
-        var userByEmail = await _userRepository.GetUserByEmailAsync(empIdClaim);
-        return userByEmail?.EmpId;
+        var claim = User.FindFirst("EmpId")?.Value
+                 ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
     }
+
+    private int GetSpaceId()
+    {
+        var role = GetRole();
+        if (role == "Admin")
+        {
+            return GetEmpId();
+        }
+        var claim = User.FindFirst("SpaceId")?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
+    }
+
+    private string GetRole() => User.FindFirst(ClaimTypes.Role)?.Value ?? "";
 
     [HttpGet]
     public async Task<IActionResult> GetAllSpaces()
     {
-        var spaces = await _spaceRepository.GetAllSpacesAsync();
-        return Ok(spaces);
+        try
+        {
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+            var spaces = await _spaceService.GetAllSpacesAsync(spaceId, role);
+            return Ok(spaces);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch spaces.", details = ex.Message });
+        }
     }
 
     [HttpGet("my")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> GetMySpaces()
     {
-        var adminId = await ResolveEmpIdAsync();
-        if (!adminId.HasValue)
-            return Unauthorized(new { message = "Invalid admin session." });
-
-        // Retrieve admin user details to check legacy space mapping
-        var adminUser = await _userRepository.GetUserByIdAsync(adminId.Value);
-        if (adminUser != null)
+        try
         {
-            int? adminSpaceId = adminUser.SpaceId;
-            if (adminSpaceId.HasValue && adminSpaceId.Value > 0)
-            {
-                // Verify if this space exists in t_spaces
-                var spaceExists = await _spaceRepository.GetSpaceByIdAsync(adminSpaceId.Value);
-                if (spaceExists == null)
-                {
-                    // Create the space in t_spaces with the exact legacy spaceid
-                    try
-                    {
-                        var dbConnection = HttpContext.RequestServices.GetRequiredService<System.Data.IDbConnection>();
-                        var insertQuery = @"
-                            INSERT INTO t_spaces (spaceid, spacename, adminid, numberofemployees, createdat, isactive, type, workingdays) 
-                            VALUES (@SpaceId, @SpaceName, @AdminId, 100, CURRENT_TIMESTAMP, TRUE, 'Department', '[""Mon"",""Tue"",""Wed"",""Thu"",""Fri""]')
-                            ON CONFLICT (spaceid) DO NOTHING;";
-                        await dbConnection.ExecuteAsync(insertQuery, new {
-                            SpaceId = adminSpaceId.Value,
-                            SpaceName = $"Workspace {adminSpaceId.Value}",
-                            AdminId = adminId.Value
-                        });
+            var adminId = GetEmpId();
+            if (adminId == 0)
+                return Unauthorized(new { message = "Invalid admin session." });
 
-                        // Adjust sequence value to prevent auto-increment collisions
-                        await dbConnection.ExecuteAsync("SELECT setval(pg_get_serial_sequence('t_spaces', 'spaceid'), COALESCE(MAX(spaceid), 1)) FROM t_spaces;");
-                        System.Console.WriteLine($"[Resiliency Fix] Created missing space for legacy admin {adminUser.Email} with SpaceId {adminSpaceId.Value}");
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Console.WriteLine($"[Resiliency Fix Error] Failed to auto-create space: {ex.Message}");
-                    }
-                }
-                else if (spaceExists.AdminId != adminId.Value)
-                {
-                    // If the space exists but has no admin or a different admin, claim ownership
-                    try
-                    {
-                        var dbConnection = HttpContext.RequestServices.GetRequiredService<System.Data.IDbConnection>();
-                        await dbConnection.ExecuteAsync("UPDATE t_spaces SET adminid = @AdminId WHERE spaceid = @SpaceId;", new {
-                            AdminId = adminId.Value,
-                            SpaceId = adminSpaceId.Value
-                        });
-                        System.Console.WriteLine($"[Resiliency Fix] Aligned space ownership for SpaceId {adminSpaceId.Value} to Admin ID {adminId.Value}");
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Console.WriteLine($"[Resiliency Fix Error] Failed to update space owner: {ex.Message}");
-                    }
-                }
-            }
-            else
-            {
-                // Admin has no SpaceId assigned. Let's see if they have spaces in t_spaces
-                var adminSpaces = await _spaceRepository.GetSpacesByAdminIdAsync(adminId.Value);
-                if (!adminSpaces.Any())
-                {
-                    // Create a brand new space for this admin
-                    try
-                    {
-                        var newSpaceName = adminUser.Email.Split('@')[0] + "'s Space";
-                        var space = new Space
-                        {
-                            SpaceName = newSpaceName,
-                            AdminId = adminId.Value,
-                            NumberOfEmployees = 100,
-                            CreatedAt = DateTime.UtcNow,
-                            IsActive = true,
-                            Type = "Department",
-                            WorkingDays = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\"]"
-                        };
-                        int newSpaceId = await _spaceRepository.CreateSpaceAsync(space);
-                        await _userRepository.UpdateUserSpaceIdAsync(adminId.Value, newSpaceId);
-                        System.Console.WriteLine($"[Resiliency Fix] Created default new space {newSpaceName} (ID: {newSpaceId}) for admin {adminUser.Email}");
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Console.WriteLine($"[Resiliency Fix Error] Failed to create new default space: {ex.Message}");
-                    }
-                }
-            }
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var spaces = await _spaceService.GetSpacesByAdminIdAsync(adminId, spaceId, role);
+            var result = spaces.Select(s => new {
+                spaceid = s.SpaceId,
+                spacename = s.SpaceName
+            });
+            return Ok(result);
         }
-
-        var spaces = await _spaceRepository.GetSpacesByAdminIdAsync(adminId.Value);
-        var result = spaces.Select(s => new {
-            spaceid = s.SpaceId,
-            spacename = s.SpaceName
-        });
-        return Ok(result);
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch admin workspaces.", details = ex.Message });
+        }
     }
 
-    [HttpGet("{id}")]
+    [HttpGet("{id:int}")]
     public async Task<IActionResult> GetSpaceById(int id)
     {
-        var space = await _spaceRepository.GetSpaceByIdAsync(id);
-        if (space == null) return NotFound();
-        return Ok(space);
+        try
+        {
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var space = await _spaceService.GetSpaceByIdAsync(id, spaceId, role);
+            if (space == null) return NotFound(new { message = "Space not found." });
+            return Ok(space);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch space details.", details = ex.Message });
+        }
     }
 
     // GET /api/spaces/admin/{adminId} -> returns all spaces of admin
-    [HttpGet("admin/{adminId}")]
+    [HttpGet("admin/{adminId:int}")]
     public async Task<IActionResult> GetSpacesByAdmin(int adminId)
     {
-        var spaces = await _spaceRepository.GetSpacesByAdminIdAsync(adminId);
-        return Ok(spaces);
+        try
+        {
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var spaces = await _spaceService.GetSpacesByAdminIdAsync(adminId, spaceId, role);
+            return Ok(spaces);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch spaces for admin.", details = ex.Message });
+        }
     }
 
     // GET /api/spaces/{spaceId}/employees -> employees of one space
-    [HttpGet("{spaceId}/employees")]
+    [HttpGet("{spaceId:int}/employees")]
     public async Task<IActionResult> GetEmployeesBySpace(int spaceId)
     {
-        var employees = await _userRepository.GetUsersBySpaceIdAsync(spaceId);
-        return Ok(employees);
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var employees = await _userService.GetUsersBySpaceIdAsync(spaceId, callerSpaceId, role);
+            return Ok(employees);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch employees of the space.", details = ex.Message });
+        }
     }
 
     // GET /api/spaces/admin/{adminId}/employees -> ALL employees under admin
-    [HttpGet("admin/{adminId}/employees")]
+    [HttpGet("admin/{adminId:int}/employees")]
     public async Task<IActionResult> GetAllEmployeesByAdmin(int adminId)
     {
-        var employees = await _userRepository.GetUsersByAdminSpacesAsync(adminId);
-        return Ok(employees);
+        try
+        {
+            var spaceId = GetSpaceId();
+            var role = GetRole();
+
+            var employees = await _userService.GetUsersByCompanyAsync(adminId, spaceId, role);
+            return Ok(employees);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch company employees.", details = ex.Message });
+        }
     }
 
     // POST /api/spaces/create
@@ -191,44 +186,55 @@ public class SpaceController : ControllerBase
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> CreateSpace([FromBody] Space space)
     {
-        var empId = await ResolveEmpIdAsync();
-        if (!empId.HasValue)
-            return Unauthorized(new { message = "Invalid admin session." });
-
-        space.AdminId = empId.Value; // adminid must always be empid
-        space.CreatedAt = DateTime.UtcNow;
-        space.IsActive = true;
-
-        if (string.IsNullOrEmpty(space.Type)) space.Type = "Department";
-        if (!space.NumberOfEmployees.HasValue) space.NumberOfEmployees = 100;
-        if (!space.NumberOfBreaks.HasValue) space.NumberOfBreaks = 2;
-        if (!space.BreakTime.HasValue) space.BreakTime = 60;
-        if (!space.WorkStartTime.HasValue) space.WorkStartTime = TimeOnly.Parse("09:00:00");
-        if (!space.WorkEndTime.HasValue) space.WorkEndTime = TimeOnly.Parse("18:00:00");
-        if (!space.WorkingHours.HasValue) space.WorkingHours = 8;
-
-        // Validate working days are not empty
-        var validDays = new HashSet<string> { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-        var wdList = space.WorkingDaysList;
-        if (wdList == null || wdList.Count == 0)
+        try
         {
-            return BadRequest(new { message = "Working days list cannot be empty." });
-        }
-        
-        if (wdList.Count > 7)
-            return BadRequest(new { message = "Working days cannot exceed 7." });
-        foreach (var d in wdList)
-        {
-            if (!validDays.Contains(d))
-                return BadRequest(new { message = $"Invalid working day: '{d}'. Valid values: Sun, Mon, Tue, Wed, Thu, Fri, Sat." });
-        }
+            var empId = GetEmpId();
+            if (empId == 0)
+                return Unauthorized(new { message = "Invalid admin session." });
 
-        var spaceId = await _spaceRepository.CreateSpaceAsync(space);
-        space.SpaceId = spaceId;
-        return CreatedAtAction(nameof(GetSpaceById), new { id = spaceId }, space);
+            var role = GetRole();
+
+            space.AdminId = empId; // adminid must always be empid
+            space.CreatedAt = DateTime.UtcNow;
+            space.IsActive = true;
+
+            if (string.IsNullOrEmpty(space.Type)) space.Type = "Department";
+            if (!space.NumberOfEmployees.HasValue) space.NumberOfEmployees = 100;
+            if (!space.NumberOfBreaks.HasValue) space.NumberOfBreaks = 2;
+            if (!space.BreakTime.HasValue) space.BreakTime = 60;
+            if (!space.WorkStartTime.HasValue) space.WorkStartTime = TimeOnly.Parse("09:00:00");
+            if (!space.WorkEndTime.HasValue) space.WorkEndTime = TimeOnly.Parse("18:00:00");
+            if (!space.WorkingHours.HasValue) space.WorkingHours = 8;
+
+            var wdList = space.WorkingDaysList;
+            if (wdList == null || wdList.Count == 0)
+            {
+                return BadRequest(new { message = "Working days list cannot be empty." });
+            }
+            if (wdList.Count > 7)
+                return BadRequest(new { message = "Working days cannot exceed 7." });
+
+            var validDays = new HashSet<string> { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+            foreach (var d in wdList)
+            {
+                if (!validDays.Contains(d))
+                    return BadRequest(new { message = $"Invalid working day: '{d}'. Allowed values: Sun, Mon, Tue, Wed, Thu, Fri, Sat." });
+            }
+
+            var spaceId = await _spaceService.CreateSpaceAsync(space, role);
+            space.SpaceId = spaceId;
+            return CreatedAtAction(nameof(GetSpaceById), new { id = spaceId }, space);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to create space.", details = ex.Message });
+        }
     }
 
-    // Keep compatibility for POST /api/spaces or legacy root
     [HttpPost]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> CreateSpaceLegacy([FromBody] Space space)
@@ -237,95 +243,84 @@ public class SpaceController : ControllerBase
     }
 
     // PUT /api/spaces/update/{spaceId}
-    [HttpPut("update/{spaceId}")]
+    [HttpPut("update/{spaceId:int}")]
     [Authorize]
     public async Task<IActionResult> UpdateSpace(int spaceId, [FromBody] Space spacePayload)
     {
-        var empId = await ResolveEmpIdAsync();
-        if (!empId.HasValue)
-            return Unauthorized(new { message = "Invalid employee session." });
-
-        var user = await _userRepository.GetUserByIdAsync(empId.Value);
-        if (user == null)
-            return Unauthorized(new { message = "User not found." });
-
-        var existingSpace = await _spaceRepository.GetSpaceByIdAsync(spaceId);
-        if (existingSpace == null)
-            return NotFound(new { message = "Space not found or has been deactivated." });
-
-        // Security Check
-        if (user.Role == "Admin")
+        try
         {
-            if (existingSpace.AdminId != empId.Value)
+            var empId = GetEmpId();
+            if (empId == 0)
+                return Unauthorized(new { message = "Invalid employee session." });
+
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var existingSpace = await _spaceService.GetSpaceByIdAsync(spaceId, callerSpaceId, role);
+            if (existingSpace == null)
+                return NotFound(new { message = "Space not found." });
+
+            // Payload binding
+            existingSpace.SpaceName = spacePayload.SpaceName;
+            
+            if (spacePayload.NumberOfEmployees.HasValue)
+                existingSpace.NumberOfEmployees = spacePayload.NumberOfEmployees.Value;
+
+            if (spacePayload.NumberOfBreaks.HasValue)
+                existingSpace.NumberOfBreaks = spacePayload.NumberOfBreaks.Value;
+
+            if (spacePayload.BreakTime.HasValue)
+                existingSpace.BreakTime = spacePayload.BreakTime.Value;
+
+            if (spacePayload.WorkStartTime.HasValue)
+                existingSpace.WorkStartTime = spacePayload.WorkStartTime.Value;
+
+            if (spacePayload.WorkEndTime.HasValue)
+                existingSpace.WorkEndTime = spacePayload.WorkEndTime.Value;
+
+            if (spacePayload.WorkingHours.HasValue)
+                existingSpace.WorkingHours = spacePayload.WorkingHours.Value;
+
+            if (!string.IsNullOrEmpty(spacePayload.Type))
+                existingSpace.Type = spacePayload.Type;
+
+            if (spacePayload.EndDate.HasValue)
+                existingSpace.EndDate = spacePayload.EndDate.Value;
+
+            var wdPayload = spacePayload.WorkingDaysList;
+            if (wdPayload != null)
             {
-                return Forbid();
+                if (wdPayload.Count == 0)
+                    return BadRequest(new { message = "Working days list cannot be empty." });
+
+                var validDaysSet = new HashSet<string> { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+                if (wdPayload.Count > 7)
+                    return BadRequest(new { message = "Working days cannot exceed 7." });
+                foreach (var d in wdPayload)
+                {
+                    if (!validDaysSet.Contains(d))
+                        return BadRequest(new { message = $"Invalid working day: '{d}'." });
+                }
+                existingSpace.WorkingDaysList = wdPayload;
             }
+
+            var result = await _spaceService.UpdateSpaceAsync(existingSpace, callerSpaceId, role);
+            if (!result)
+                return BadRequest(new { message = "Failed to update space." });
+
+            return NoContent();
         }
-        else if (user.Role == "Manager" || user.Role == "AssistantManager")
+        catch (UnauthorizedAccessException ex)
         {
-            if (user.SpaceId != spaceId)
-            {
-                return Forbid();
-            }
+            return StatusCode(403, new { message = ex.Message });
         }
-        else
+        catch (Exception ex)
         {
-            return Forbid();
+            return StatusCode(500, new { message = "Failed to update space.", details = ex.Message });
         }
-
-        existingSpace.SpaceName = spacePayload.SpaceName;
-        
-        if (spacePayload.NumberOfEmployees.HasValue)
-            existingSpace.NumberOfEmployees = spacePayload.NumberOfEmployees.Value;
-
-        if (spacePayload.NumberOfBreaks.HasValue)
-            existingSpace.NumberOfBreaks = spacePayload.NumberOfBreaks.Value;
-
-        if (spacePayload.BreakTime.HasValue)
-            existingSpace.BreakTime = spacePayload.BreakTime.Value;
-
-        if (spacePayload.WorkStartTime.HasValue)
-            existingSpace.WorkStartTime = spacePayload.WorkStartTime.Value;
-
-        if (spacePayload.WorkEndTime.HasValue)
-            existingSpace.WorkEndTime = spacePayload.WorkEndTime.Value;
-
-        if (spacePayload.WorkingHours.HasValue)
-            existingSpace.WorkingHours = spacePayload.WorkingHours.Value;
-
-        if (!string.IsNullOrEmpty(spacePayload.Type))
-            existingSpace.Type = spacePayload.Type;
-
-        if (spacePayload.EndDate.HasValue)
-            existingSpace.EndDate = spacePayload.EndDate.Value;
-
-        // Handle working days update
-        var wdPayload = spacePayload.WorkingDaysList;
-        if (wdPayload != null)
-        {
-            if (wdPayload.Count == 0)
-                return BadRequest(new { message = "Working days list cannot be empty." });
-
-            var validDaysSet = new HashSet<string> { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-            if (wdPayload.Count > 7)
-                return BadRequest(new { message = "Working days cannot exceed 7." });
-            foreach (var d in wdPayload)
-            {
-                if (!validDaysSet.Contains(d))
-                    return BadRequest(new { message = $"Invalid working day: '{d}'." });
-            }
-            existingSpace.WorkingDaysList = wdPayload;
-        }
-
-        var result = await _spaceRepository.UpdateSpaceAsync(existingSpace);
-        if (!result)
-            return BadRequest(new { message = "Failed to update space." });
-
-        return NoContent();
     }
 
-    // Keep compatibility for PUT /api/spaces/{id}
-    [HttpPut("{id}")]
+    [HttpPut("{id:int}")]
     [Authorize]
     public async Task<IActionResult> UpdateSpaceLegacy(int id, [FromBody] Space spacePayload)
     {
@@ -333,28 +328,30 @@ public class SpaceController : ControllerBase
     }
 
     // DELETE /api/spaces/delete/{id}
-    [HttpDelete("delete/{id}")]
+    [HttpDelete("delete/{id:int}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> DeleteSpace(int id)
     {
-        var empId = await ResolveEmpIdAsync();
-        if (!empId.HasValue)
-            return Unauthorized(new { message = "Invalid admin session." });
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-        var existingSpace = await _spaceRepository.GetSpaceByIdAsync(id);
-        if (existingSpace == null)
-            return NotFound(new { message = "Space not found or has been deactivated." });
-
-        if (existingSpace.AdminId != empId.Value)
-            return Forbid();
-
-        var result = await _spaceRepository.SoftDeleteSpaceAsync(id);
-        if (!result) return NotFound();
-        return NoContent();
+            var result = await _spaceService.DeleteSpaceAsync(id, callerSpaceId, role);
+            if (!result) return NotFound(new { message = "Space not found." });
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to delete space.", details = ex.Message });
+        }
     }
 
-    // Keep compatibility for DELETE /api/spaces/{id}
-    [HttpDelete("{id}")]
+    [HttpDelete("{id:int}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> DeleteSpaceLegacy(int id)
     {
@@ -363,102 +360,149 @@ public class SpaceController : ControllerBase
 
     // --- CONTRACT ENDPOINTS ---
 
-    [HttpGet("admin/{adminId}/contracts")]
+    [HttpGet("admin/{adminId:int}/contracts")]
     public async Task<IActionResult> GetContractsByAdmin(int adminId)
     {
-        var activeSpaces = await _spaceRepository.GetSpacesByAdminIdAsync(adminId);
-        foreach (var space in activeSpaces)
+        try
         {
-            if (space.Type == "Contract")
-            {
-                await _spaceRepository.CheckAndUpdateContractExpiryAsync(space.SpaceId);
-            }
-        }
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-        var contracts = await _spaceRepository.GetContractsByAdminIdAsync(adminId);
-        return Ok(contracts);
+            var contracts = await _spaceService.GetContractsByAdminIdAsync(adminId, callerSpaceId, role);
+            return Ok(contracts);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch contracts.", details = ex.Message });
+        }
     }
 
-    [HttpGet("admin/{adminId}/departments")]
+    [HttpGet("admin/{adminId:int}/departments")]
     public async Task<IActionResult> GetDepartmentsByAdmin(int adminId)
     {
-        var departments = await _spaceRepository.GetDepartmentsByAdminIdAsync(adminId);
-        return Ok(departments);
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var departments = await _spaceService.GetDepartmentsByAdminIdAsync(adminId, callerSpaceId, role);
+            return Ok(departments);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch departments.", details = ex.Message });
+        }
     }
 
-    [HttpGet("contract/{spaceId}/payment")]
+    [HttpGet("contract/{spaceId:int}/payment")]
     public async Task<IActionResult> GetContractPayment(int spaceId)
     {
-        var payment = await _spaceRepository.GetPaymentBySpaceIdAsync(spaceId);
-        if (payment == null)
+        try
         {
-            var space = await _spaceRepository.GetSpaceByIdAsync(spaceId);
-            if (space == null) return NotFound(new { message = "Space not found." });
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-            return Ok(new {
-                PaymentId = 0,
-                SpaceId = spaceId,
-                Amount = 50000m,
-                PaymentMethod = "UPI",
-                Status = "Pending",
-                TransactionId = "",
-                PaidAt = (DateTime?)null,
-                CreatedAt = DateTime.UtcNow
-            });
+            var payment = await _spaceService.GetPaymentBySpaceIdAsync(spaceId, callerSpaceId, role);
+            if (payment == null)
+            {
+                return Ok(new {
+                    PaymentId = 0,
+                    SpaceId = spaceId,
+                    Amount = 50000m,
+                    PaymentMethod = "UPI",
+                    Status = "Pending",
+                    TransactionId = "",
+                    PaidAt = (DateTime?)null,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+            return Ok(payment);
         }
-        return Ok(payment);
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch contract payments.", details = ex.Message });
+        }
     }
 
-    [HttpPost("contract/{spaceId}/pay")]
+    [HttpPost("contract/{spaceId:int}/pay")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> PayContract(int spaceId, [FromBody] ContractPayment paymentPayload)
     {
-        var empId = await ResolveEmpIdAsync();
-        if (!empId.HasValue) return Unauthorized();
-
-        var space = await _spaceRepository.GetSpaceByIdAsync(spaceId);
-        if (space == null) return NotFound(new { message = "Contract space not found." });
-
-        if (space.AdminId != empId.Value) return Forbid();
-
-        var existingPayment = await _spaceRepository.GetPaymentBySpaceIdAsync(spaceId);
-        int paymentId = 0;
-        
-        if (existingPayment == null)
+        try
         {
-            paymentPayload.SpaceId = spaceId;
-            paymentPayload.Status = "Paid";
-            paymentPayload.PaidAt = DateTime.UtcNow;
-            paymentPayload.CreatedAt = DateTime.UtcNow;
-            paymentId = await _spaceRepository.CreatePaymentAsync(paymentPayload);
+            var empId = GetEmpId();
+            if (empId == 0) return Unauthorized();
+
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var existingPayment = await _spaceService.GetPaymentBySpaceIdAsync(spaceId, callerSpaceId, role);
+            int paymentId = 0;
+            
+            if (existingPayment == null)
+            {
+                paymentPayload.SpaceId = spaceId;
+                paymentPayload.Status = "Paid";
+                paymentPayload.PaidAt = DateTime.UtcNow;
+                paymentPayload.CreatedAt = DateTime.UtcNow;
+                paymentId = await _spaceService.CreatePaymentAsync(paymentPayload, callerSpaceId, role);
+            }
+            else
+            {
+                paymentId = existingPayment.PaymentId;
+                await _spaceService.UpdatePaymentStatusAsync(spaceId, "Paid", paymentPayload.TransactionId, paymentPayload.PaymentMethod, callerSpaceId, role);
+            }
+
+            await _spaceService.GeneratePayslipsAsync(spaceId, paymentId, paymentPayload.Amount, callerSpaceId, role);
+            return Ok(new { message = "Contract payment processed successfully and employee payslips generated.", paymentId });
         }
-        else
+        catch (UnauthorizedAccessException ex)
         {
-            paymentId = existingPayment.PaymentId;
-            await _spaceRepository.UpdatePaymentStatusAsync(spaceId, "Paid", paymentPayload.TransactionId, paymentPayload.PaymentMethod);
+            return StatusCode(403, new { message = ex.Message });
         }
-
-        await _spaceRepository.GeneratePayslipsAsync(spaceId, paymentId, paymentPayload.Amount);
-
-        return Ok(new { message = "Contract payment processed successfully and employee payslips generated.", paymentId });
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to process contract payment.", details = ex.Message });
+        }
     }
 
-    [HttpGet("contract/{spaceId}/payslips")]
+    [HttpGet("contract/{spaceId:int}/payslips")]
     public async Task<IActionResult> GetContractPayslips(int spaceId)
     {
-        var slips = await _spaceRepository.GetPayslipsBySpaceIdAsync(spaceId);
-        return Ok(slips);
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var slips = await _spaceService.GetPayslipsBySpaceIdAsync(spaceId, callerSpaceId, role);
+            return Ok(slips);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch contract payslips.", details = ex.Message });
+        }
     }
 
     // --- PAYROLL ENDPOINTS ---
 
-    [HttpGet("{spaceId}/payroll")]
+    [HttpGet("{spaceId:int}/payroll")]
     public async Task<IActionResult> GetSpacePayroll(int spaceId, [FromQuery] bool applyPenalties = true, [FromQuery] int? month = null, [FromQuery] int? year = null)
     {
         try
         {
-            var summary = await _spaceRepository.GetSpacePayrollSummaryAsync(spaceId);
-            var evaluations = await _spaceRepository.GetSpaceEmployeePayrollEvaluationsAsync(spaceId, applyPenalties, month, year);
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var summary = await _spaceService.GetSpacePayrollSummaryAsync(spaceId, callerSpaceId, role);
+            var evaluations = await _spaceService.GetSpaceEmployeePayrollEvaluationsAsync(spaceId, month, year, callerSpaceId, role);
 
             var evalList = (evaluations as IEnumerable<dynamic>)?.ToList() ?? new List<dynamic>();
             var completeProfiles = evalList.Where(e => e.ProfileStatus == "Complete").ToList();
@@ -475,251 +519,51 @@ public class SpaceController : ControllerBase
                 evaluations = evaluations
             });
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
         catch (Exception ex)
         {
-            Console.WriteLine("PAYROLL CONTROLLER ERROR:");
-            Console.WriteLine(ex.ToString());
-
-            return StatusCode(500, new {
-                error = "Payroll failed",
-                message = ex.Message
-            });
+            Console.WriteLine($"[SpaceController.GetSpacePayroll] Error: {ex.Message}");
+            return StatusCode(500, new { error = "Payroll failed", message = ex.Message });
         }
     }
 
-    public class PayrollPayoutRequest
-    {
-        public List<EmployeePayoutItem> Employees { get; set; } = new();
-        public string PaymentMethod { get; set; } = "Cash"; // Cash / UPI / Razorpay
-        public string? TransactionId { get; set; }
-    }
-
-    public class ConfirmPaymentRequest
-    {
-        public string OrderId { get; set; } = string.Empty;
-        public string PaymentId { get; set; } = string.Empty;
-        public string Signature { get; set; } = string.Empty;
-        public List<EmployeePayoutItem> Employees { get; set; } = new();
-    }
-
-    public class EmployeePayoutItem
-    {
-        public int EmpId { get; set; }
-        public decimal TotalAmount { get; set; }
-        public decimal Deduction { get; set; }
-        public decimal FinalAmount { get; set; }
-        public bool IsManual { get; set; }
-        public decimal AllowanceAmount { get; set; }
-        public decimal DeductionAmount { get; set; }
-        public decimal Basic { get; set; }
-        public decimal TotalAllowance { get; set; }
-        public decimal TotalDeduction { get; set; }
-        public string? Breakdown { get; set; }
-    }
-
-    private string? ValidatePayoutProfile(string paymentMethod, dynamic eval)
-    {
-        var name = eval.Name?.ToString() ?? "Employee";
-        if (paymentMethod == "UPI")
-        {
-            var upiid = eval.UpiId?.ToString();
-            if (string.IsNullOrWhiteSpace(upiid))
-            {
-                return $"Employee '{name}' does not have a UPI ID configured. UPI ID is required for UPI payments.";
-            }
-        }
-        else if (paymentMethod == "Razorpay" || paymentMethod == "Bank Transfer")
-        {
-            var accNum = eval.AccountNumber?.ToString();
-            var bankName = eval.BankName?.ToString();
-            var accHolder = eval.AccountHolderName?.ToString();
-            var ifsc = eval.IfscCode?.ToString();
-
-            if (string.IsNullOrWhiteSpace(accNum) || string.IsNullOrWhiteSpace(bankName) || string.IsNullOrWhiteSpace(accHolder) || string.IsNullOrWhiteSpace(ifsc))
-            {
-                return $"Employee '{name}' is missing bank configuration details. Bank details (Account Number, Bank Name, Account Holder, and IFSC) are required for {paymentMethod} payments.";
-            }
-        }
-        return null;
-    }
-
-    private async Task<(int successCount, Guid groupId)> ProcessPayoutBatchAsync(
-        int spaceId, 
-        List<EmployeePayoutItem> employees, 
-        string paymentMethod, 
-        string? transactionId, 
-        Guid? groupIdVal)
-    {
-        var evaluations = await _spaceRepository.GetSpaceEmployeePayrollEvaluationsAsync(spaceId);
-        var evalDict = new Dictionary<int, dynamic>();
-        foreach (var ev in evaluations)
-        {
-            evalDict[Convert.ToInt32(ev.EmpId)] = ev;
-        }
-
-        Guid groupId = groupIdVal ?? (employees.Count > 1 ? Guid.NewGuid() : Guid.Empty);
-        int successCount = 0;
-
-        foreach (var item in employees)
-        {
-            if (!evalDict.TryGetValue(item.EmpId, out var eval))
-            {
-                throw new Exception($"Employee with ID {item.EmpId} does not belong to this Space.");
-            }
-
-            var validationError = ValidatePayoutProfile(paymentMethod, eval);
-            if (validationError != null)
-            {
-                throw new Exception(validationError);
-            }
-
-            // Retrieve live salary evaluations directly from backend as source of truth
-            var salaryResponse = await _salaryRepository.GetSalaryAsync(item.EmpId, DateTime.UtcNow.Month, DateTime.UtcNow.Year);
-            if (salaryResponse == null)
-            {
-                throw new Exception($"Failed to evaluate salary structure for employee #{item.EmpId}.");
-            }
-
-            var basicVal = salaryResponse.Basic;
-            var hraVal = salaryResponse.Hra;
-            var daVal = salaryResponse.Da;
-            
-            var allowancesList = salaryResponse.Allowances.Select(a => new { name = a.Name, type = a.Type, value = a.Value, amount = a.Amount }).ToList();
-            var deductionsList = salaryResponse.Deductions.Where(d => d.DeductionType == "Standard").Select(d => new { name = d.Name, type = d.Type, value = d.Value, amount = d.Amount }).ToList();
-            var penaltiesList = salaryResponse.Deductions.Where(d => d.DeductionType != "Standard").Select(d => new { name = d.Name, type = d.Type, value = d.Value, amount = d.Amount, deductionType = d.DeductionType }).ToList();
-
-            var finalAmountToPay = item.IsManual ? item.FinalAmount : salaryResponse.Net;
-
-            var breakdownObj = new
-            {
-                basic = basicVal,
-                hra = hraVal,
-                da = daVal,
-                allowances = allowancesList,
-                deductions = deductionsList,
-                penalties = penaltiesList,
-                finalAmount = finalAmountToPay
-            };
-
-            string breakdownJson = System.Text.Json.JsonSerializer.Serialize(breakdownObj);
-
-            var payrollPayment = new PayrollPayment
-            {
-                EmpId = item.EmpId,
-                SpaceId = spaceId,
-                TotalAmount = basicVal + salaryResponse.Hra + salaryResponse.Da,
-                Deduction = salaryResponse.Deductions.Sum(d => d.Amount),
-                FinalAmount = finalAmountToPay,
-                Status = "Paid",
-                PaidAt = DateTime.UtcNow,
-                CreatedAt = DateTime.UtcNow,
-                IsManual = item.IsManual,
-                AllowanceAmount = salaryResponse.Allowances.Sum(a => a.Amount),
-                DeductionAmount = salaryResponse.Deductions.Sum(d => d.Amount),
-                PaymentMethod = paymentMethod,
-                TransactionId = transactionId,
-                GroupId = groupId == Guid.Empty ? null : groupId
-            };
-
-            int paymentId = await _spaceRepository.CreatePayrollPaymentAsync(payrollPayment);
-
-            if (paymentId > 0)
-            {
-                try
-                {
-                    var slip = new Payslip
-                    {
-                        EmpId = item.EmpId,
-                        SpaceId = spaceId,
-                        BaseAmount = payrollPayment.TotalAmount,
-                        Deduction = payrollPayment.Deduction,
-                        FinalAmount = finalAmountToPay,
-                        Type = "Payroll",
-                        PaymentId = paymentId,
-                        GeneratedAt = DateTime.UtcNow,
-                        Basic = basicVal,
-                        TotalAllowance = payrollPayment.AllowanceAmount,
-                        TotalDeduction = payrollPayment.Deduction,
-                        Breakdown = breakdownJson,
-                        PaymentMethod = paymentMethod,
-                        TransactionId = transactionId,
-                        AccountNumber = eval.AccountNumber?.ToString(),
-                        BankName = eval.BankName?.ToString(),
-                        AccountHolderName = eval.AccountHolderName?.ToString(),
-                        IfscCode = eval.IfscCode?.ToString(),
-                        UpiId = eval.UpiId?.ToString()
-                    };
-
-                    await _spaceRepository.GeneratePayrollPayslipAsync(slip);
-                }
-                catch (Exception slipEx)
-                {
-                    System.Console.WriteLine($"[Payslip Generation Warning] Payment #{paymentId} for EmpId {item.EmpId} was saved, but payslip generation failed: {slipEx.Message}");
-                }
-                successCount++;
-            }
-        }
-
-        return (successCount, groupId);
-    }
-
-    [HttpPost("{spaceId}/payroll/pay")]
+    [HttpPost("{spaceId:int}/payroll/pay")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> PaySpacePayroll(int spaceId, [FromBody] PayrollPayoutRequest request)
     {
         try
         {
-            var adminEmpId = await ResolveEmpIdAsync();
-            if (!adminEmpId.HasValue) return Unauthorized();
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-            var space = await _spaceRepository.GetSpaceByIdAsync(spaceId);
-            if (space == null) return NotFound(new { message = "Space not found." });
-
-            if (space.AdminId != adminEmpId.Value) return Forbid();
-
-            if (request == null || request.Employees == null || request.Employees.Count == 0)
-            {
-                return BadRequest("No employees");
-            }
-
-            var paymentMethod = request.PaymentMethod?.Trim();
-            if (paymentMethod != "Cash" && paymentMethod != "UPI" && paymentMethod != "Bank Transfer")
-            {
-                return BadRequest(new { message = "Invalid payment method for this endpoint. Please use Cash, UPI, or Bank Transfer." });
-            }
-
-            if (request.Employees.Count > 1 && paymentMethod == "UPI")
-            {
-                return BadRequest(new { message = "Direct UPI payment is NOT allowed for multiple employees (bulk payout)." });
-            }
-
-            var (successCount, groupId) = await ProcessPayoutBatchAsync(spaceId, request.Employees, paymentMethod, request.TransactionId, null);
+            var (successCount, groupId) = await _salaryService.PaySpacePayrollAsync(spaceId, request, callerSpaceId, role);
             return Ok(new { message = $"Successfully processed payroll for {successCount} employee(s).", groupId });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
-            System.Console.WriteLine($"[PaySpacePayroll Error] {ex.Message} \n {ex.StackTrace}");
             return BadRequest(new { message = ex.Message });
         }
     }
 
-    [HttpPost("{spaceId}/payroll/confirm-payment")]
+    [HttpPost("{spaceId:int}/payroll/confirm-payment")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> ConfirmPayrollPayment(int spaceId, [FromBody] ConfirmPaymentRequest request)
     {
         try
         {
-            var adminEmpId = await ResolveEmpIdAsync();
-            if (!adminEmpId.HasValue) return Unauthorized();
-
-            var space = await _spaceRepository.GetSpaceByIdAsync(spaceId);
-            if (space == null) return NotFound(new { message = "Space not found." });
-
-            if (space.AdminId != adminEmpId.Value) return Forbid();
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
             if (request == null || request.Employees == null || request.Employees.Count == 0)
             {
-                return BadRequest("No employees");
+                return BadRequest("No employees provided.");
             }
 
             if (string.IsNullOrEmpty(request.OrderId) || string.IsNullOrEmpty(request.PaymentId))
@@ -727,7 +571,6 @@ public class SpaceController : ControllerBase
                 return BadRequest(new { message = "Razorpay orderId and paymentId are required." });
             }
 
-            // Verify Razorpay signature if secret exists and not mock
             var keySecret = _configuration["Razorpay:KeySecret"];
             bool isMock = string.IsNullOrEmpty(keySecret) 
                 || keySecret == "YOUR_RAZORPAY_KEY_SECRET" 
@@ -752,75 +595,82 @@ public class SpaceController : ControllerBase
                 }
                 catch (Exception ex)
                 {
-                    System.Console.WriteLine($"[Signature Verification Error] {ex.Message}");
-                    return BadRequest(new { message = "Razorpay payment signature verification failed." });
+                    return BadRequest(new { message = "Razorpay payment signature verification failed.", details = ex.Message });
                 }
             }
 
-            var (successCount, groupId) = await ProcessPayoutBatchAsync(spaceId, request.Employees, "Razorpay", request.PaymentId, null);
+            var (successCount, groupId) = await _salaryService.ConfirmPayrollPaymentAsync(spaceId, request, callerSpaceId, role);
             return Ok(new { message = $"Successfully confirmed and processed Razorpay payroll for {successCount} employee(s).", groupId });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
         }
         catch (Exception ex)
         {
-            System.Console.WriteLine($"[ConfirmPayrollPayment Error] {ex.Message} \n {ex.StackTrace}");
             return BadRequest(new { message = ex.Message });
         }
     }
 
-    [HttpPost("{spaceId}/payroll/reset")]
+    [HttpPost("{spaceId:int}/payroll/reset")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> ResetSpacePayroll(int spaceId)
     {
-        var adminEmpId = await ResolveEmpIdAsync();
-        if (!adminEmpId.HasValue) return Unauthorized();
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-        var space = await _spaceRepository.GetSpaceByIdAsync(spaceId);
-        if (space == null) return NotFound(new { message = "Space not found." });
-
-        if (space.AdminId != adminEmpId.Value) return Forbid();
-
-        await _spaceRepository.ResetSpacePayrollPaymentsAsync(spaceId);
-        return Ok(new { message = "Successfully reset all payroll payments and generated payslips for this space." });
+            await _salaryService.ResetSpacePayrollAsync(spaceId, callerSpaceId, role);
+            return Ok(new { message = "Successfully reset all payroll payments and generated payslips for this space." });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 
-    [HttpPost("{spaceId}/payroll/razorpay/order")]
+    [HttpPost("{spaceId:int}/payroll/razorpay/order")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> CreateRazorpayOrder(int spaceId, [FromBody] RazorpayOrderRequest request)
     {
-        var adminEmpId = await ResolveEmpIdAsync();
-        if (!adminEmpId.HasValue) return Unauthorized();
-
-        var space = await _spaceRepository.GetSpaceByIdAsync(spaceId);
-        if (space == null) return NotFound(new { message = "Space not found." });
-        if (space.AdminId != adminEmpId.Value) return Forbid();
-
-        if (request == null || request.Amount <= 0)
-        {
-            return BadRequest(new { message = "Invalid payment amount." });
-        }
-
-        // Check appsettings config
-        var keyId = _configuration["Razorpay:KeyId"];
-        var keySecret = _configuration["Razorpay:KeySecret"];
-
-        if (string.IsNullOrEmpty(keyId) || string.IsNullOrEmpty(keySecret) 
-            || keyId == "YOUR_RAZORPAY_KEY_ID" || keyId == "YOUR_RAZORPAY_KEY"
-            || keySecret == "YOUR_RAZORPAY_KEY_SECRET" || keySecret == "YOUR_RAZORPAY_SECRET")
-        {
-            // Fallback mock mode
-            var mockOrderId = "order_mock_" + Guid.NewGuid().ToString("N").Substring(0, 12);
-            System.Console.WriteLine($"[Razorpay Mock Mode] Generated mock order ID: {mockOrderId} for amount: {request.Amount}");
-            return Ok(new {
-                orderId = mockOrderId,
-                amount = request.Amount * 100,
-                currency = "INR",
-                key = "mock_key_id",
-                isMock = true
-            });
-        }
-
         try
         {
+            var adminEmpId = GetEmpId();
+            if (adminEmpId == 0) return Unauthorized();
+
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            if (role != "Admin" && role != "SuperAdmin") return StatusCode(403, new { message = "Access denied." });
+            if (role != "SuperAdmin" && spaceId != callerSpaceId) return StatusCode(403, new { message = "Access denied." });
+
+            if (request == null || request.Amount <= 0)
+            {
+                return BadRequest(new { message = "Invalid payment amount." });
+            }
+
+            var keyId = _configuration["Razorpay:KeyId"];
+            var keySecret = _configuration["Razorpay:KeySecret"];
+
+            if (string.IsNullOrEmpty(keyId) || string.IsNullOrEmpty(keySecret) 
+                || keyId == "YOUR_RAZORPAY_KEY_ID" || keyId == "YOUR_RAZORPAY_KEY"
+                || keySecret == "YOUR_RAZORPAY_KEY_SECRET" || keySecret == "YOUR_RAZORPAY_SECRET")
+            {
+                var mockOrderId = "order_mock_" + Guid.NewGuid().ToString("N").Substring(0, 12);
+                return Ok(new {
+                    orderId = mockOrderId,
+                    amount = request.Amount * 100,
+                    currency = "INR",
+                    key = "mock_key_id",
+                    isMock = true
+                });
+            }
+
             using (var client = new System.Net.Http.HttpClient())
             {
                 var authHeader = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{keyId}:{keySecret}"));
@@ -844,7 +694,6 @@ public class SpaceController : ControllerBase
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    System.Console.WriteLine($"[Razorpay Order Error] {responseString}");
                     return BadRequest(new { message = "Failed to create Razorpay order.", details = responseString });
                 }
 
@@ -876,16 +725,34 @@ public class SpaceController : ControllerBase
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> SetEmployeeSalary([FromBody] EmployeeSalaryRequest request)
     {
-        var adminEmpId = await ResolveEmpIdAsync();
-        if (!adminEmpId.HasValue) return Unauthorized();
+        try
+        {
+            var adminEmpId = GetEmpId();
+            if (adminEmpId == 0) return Unauthorized();
 
-        if (request == null || request.EmpId <= 0 || request.Basic < 0)
-            return BadRequest(new { message = "Invalid salary data." });
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-        var success = await _spaceRepository.UpdateEmployeeBasicSalaryAsync(request.EmpId, request.SpaceId, request.Basic);
-        if (!success) return BadRequest(new { message = "Failed to update employee salary." });
+            if (request == null || request.EmpId <= 0 || request.Basic < 0)
+                return BadRequest(new { message = "Invalid salary data." });
 
-        return Ok(new { message = "Employee salary updated successfully." });
+            var success = await _spaceService.UpdateEmployeeBasicSalaryAsync(request.EmpId, request.SpaceId, request.Basic, callerSpaceId, role);
+            if (!success) return BadRequest(new { message = "Failed to update employee salary." });
+
+            return Ok(new { message = "Employee salary updated successfully." });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error updating salary.", details = ex.Message });
+        }
     }
 
     public class EmployeeSalaryRequest
@@ -895,95 +762,151 @@ public class SpaceController : ControllerBase
         public decimal Basic { get; set; }
     }
 
-    [HttpGet("{spaceId}/allowances")]
+    [HttpGet("{spaceId:int}/allowances")]
     public async Task<IActionResult> GetAllowances(int spaceId)
     {
-        var list = await _spaceRepository.GetAllowancesBySpaceIdAsync(spaceId);
-        return Ok(list);
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var list = await _spaceService.GetAllowancesBySpaceIdAsync(spaceId, callerSpaceId, role);
+            return Ok(list);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch allowances.", details = ex.Message });
+        }
     }
 
-    [HttpPost("{spaceId}/allowances")]
+    [HttpPost("{spaceId:int}/allowances")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> CreateAllowance(int spaceId, [FromBody] Allowance allowance)
     {
-        var adminEmpId = await ResolveEmpIdAsync();
-        if (!adminEmpId.HasValue) return Unauthorized();
+        try
+        {
+            var adminEmpId = GetEmpId();
+            if (adminEmpId == 0) return Unauthorized();
 
-        allowance.SpaceId = spaceId;
-        allowance.AdminId = adminEmpId.Value;
-        allowance.CreatedAt = DateTime.UtcNow;
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-        var allowanceId = await _spaceRepository.CreateAllowanceAsync(allowance);
-        allowance.AllowanceId = allowanceId;
-        return Ok(allowance);
+            allowance.SpaceId = spaceId;
+            allowance.AdminId = adminEmpId;
+            allowance.CreatedAt = DateTime.UtcNow;
+
+            var allowanceId = await _spaceService.CreateAllowanceAsync(allowance, callerSpaceId, role);
+            allowance.AllowanceId = allowanceId;
+            return Ok(allowance);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to create allowance.", details = ex.Message });
+        }
     }
 
-    [HttpDelete("allowances/{allowanceId}")]
+    [HttpDelete("allowances/{allowanceId:int}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> DeleteAllowance(int allowanceId)
     {
-        var success = await _spaceRepository.DeleteAllowanceAsync(allowanceId);
-        if (!success) return NotFound(new { message = "Allowance not found." });
-        return NoContent();
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var success = await _spaceService.DeleteAllowanceAsync(allowanceId, callerSpaceId, role);
+            if (!success) return NotFound(new { message = "Allowance not found." });
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to delete allowance.", details = ex.Message });
+        }
     }
 
-    [HttpGet("{spaceId}/deductions")]
+    [HttpGet("{spaceId:int}/deductions")]
     public async Task<IActionResult> GetDeductions(int spaceId)
     {
-        var list = await _spaceRepository.GetDeductionsBySpaceIdAsync(spaceId);
-        return Ok(list);
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
+
+            var list = await _spaceService.GetDeductionsBySpaceIdAsync(spaceId, callerSpaceId, role);
+            return Ok(list);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to fetch deductions.", details = ex.Message });
+        }
     }
 
-    [HttpPost("{spaceId}/deductions")]
+    [HttpPost("{spaceId:int}/deductions")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> CreateDeduction(int spaceId, [FromBody] Deduction deduction)
     {
-        var adminEmpId = await ResolveEmpIdAsync();
-        if (!adminEmpId.HasValue) return Unauthorized();
+        try
+        {
+            var adminEmpId = GetEmpId();
+            if (adminEmpId == 0) return Unauthorized();
 
-        deduction.SpaceId = spaceId;
-        deduction.AdminId = adminEmpId.Value;
-        deduction.CreatedAt = DateTime.UtcNow;
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-        var deductionId = await _spaceRepository.CreateDeductionAsync(deduction);
-        deduction.DeductionId = deductionId;
-        return Ok(deduction);
+            deduction.SpaceId = spaceId;
+            deduction.AdminId = adminEmpId;
+            deduction.CreatedAt = DateTime.UtcNow;
+
+            var deductionId = await _spaceService.CreateDeductionAsync(deduction, callerSpaceId, role);
+            deduction.DeductionId = deductionId;
+            return Ok(deduction);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to create deduction.", details = ex.Message });
+        }
     }
 
-    [HttpDelete("deductions/{deductionId}")]
+    [HttpDelete("deductions/{deductionId:int}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> DeleteDeduction(int deductionId)
     {
-        var success = await _spaceRepository.DeleteDeductionAsync(deductionId);
-        if (!success) return NotFound(new { message = "Deduction not found." });
-        return NoContent();
-    }
+        try
+        {
+            var callerSpaceId = GetSpaceId();
+            var role = GetRole();
 
-    [HttpGet("diagnostics")]
-    [AllowAnonymous]
-    public async Task<IActionResult> RunDiagnostics()
-    {
-        var dbConn = HttpContext.RequestServices.GetService(typeof(System.Data.IDbConnection)) as System.Data.IDbConnection;
-        if (dbConn == null)
-            return StatusCode(500, "Could not resolve database connection.");
-
-        var admins = await Dapper.SqlMapper.QueryAsync(dbConn, "SELECT empid, email, passwordhash FROM t_users WHERE role = 'Admin';");
-        var spaces = await Dapper.SqlMapper.QueryAsync(dbConn, "SELECT spaceid, spacename, adminid FROM t_spaces;");
-
-        return Ok(new { admins, spaces });
-    }
-
-    [HttpGet("diagnostics-fix")]
-    [AllowAnonymous]
-    public async Task<IActionResult> RunDiagnosticsFix([FromQuery] int adminId, [FromQuery] int spaceId)
-    {
-        var dbConn = HttpContext.RequestServices.GetService(typeof(System.Data.IDbConnection)) as System.Data.IDbConnection;
-        if (dbConn == null)
-            return StatusCode(500, "Could not resolve database connection.");
-
-        var query = "UPDATE t_spaces SET adminid = @AdminId WHERE spaceid = @SpaceId";
-        var result = await Dapper.SqlMapper.ExecuteAsync(dbConn, query, new { AdminId = adminId, SpaceId = spaceId });
-
-        return Ok(new { message = $"Successfully updated {result} row(s). spaceid = {spaceId} is now assigned to adminid = {adminId}." });
+            var success = await _spaceService.DeleteDeductionAsync(deductionId, callerSpaceId, role);
+            if (!success) return NotFound(new { message = "Deduction not found." });
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to delete deduction.", details = ex.Message });
+        }
     }
 }

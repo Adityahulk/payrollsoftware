@@ -499,6 +499,7 @@ public class SpaceRepository : ISpaceRepository
               FROM t_attendance a
               JOIN t_users u ON a.empid = u.empid
               WHERE u.spaceid = @SpaceId
+                AND COALESCE(a.status, '') != 'Absent'
                 AND EXTRACT(MONTH FROM a.attendancedate) = @Month
                 AND EXTRACT(YEAR FROM a.attendancedate) = @Year;",
             new { SpaceId = spaceId, Month = targetMonth, Year = targetYear });
@@ -538,7 +539,28 @@ public class SpaceRepository : ISpaceRepository
             }
         }
 
-        Console.WriteLine($"[Payroll] Bulk data fetched. Employees: {employeesList.Count}, DOJs: {dojDict.Count}, AttDates: {attDatesDict.Count}, LeaveDates: {leaveDatesDict.Count}");
+        // Bulk-fetch holidays for this space in the target month/year
+        var holidayRows = await _dbConnection.QueryAsync<dynamic>(
+            @"SELECT holidaydate::timestamp AS hdate
+              FROM t_holidays
+              WHERE spaceid = @SpaceId
+                AND EXTRACT(MONTH FROM holidaydate) = @Month
+                AND EXTRACT(YEAR FROM holidaydate) = @Year;",
+            new { SpaceId = spaceId, Month = targetMonth, Year = targetYear });
+        var spaceHolidays = new HashSet<DateTime>();
+        foreach (var h in holidayRows ?? Enumerable.Empty<dynamic>())
+        {
+            if (h.hdate != null)
+            {
+                DateTime parsedDate;
+                if (DateTime.TryParse(h.hdate.ToString(), out parsedDate))
+                {
+                    spaceHolidays.Add(parsedDate.Date);
+                }
+            }
+        }
+
+        Console.WriteLine($"[Payroll] Bulk data fetched. Employees: {employeesList.Count}, DOJs: {dojDict.Count}, AttDates: {attDatesDict.Count}, LeaveDates: {leaveDatesDict.Count}, Holidays: {spaceHolidays.Count}");
 
         var results = new List<dynamic>();
 
@@ -653,6 +675,7 @@ public class SpaceRepository : ISpaceRepository
                         if (!workingDaysList.Contains(dayName, StringComparer.OrdinalIgnoreCase)) continue;
                         if (attDatesSet.Contains(d.Date))   continue;
                         if (leaveDatesSet.Contains(d.Date)) continue;
+                        if (spaceHolidays.Contains(d.Date)) continue;
                         absentCount++;
                     }
                 }
@@ -816,10 +839,34 @@ public class SpaceRepository : ISpaceRepository
 
     public async Task<bool> GeneratePayrollPayslipAsync(Payslip payslip)
     {
+        // Ensure month/year are set — default to current UTC if not provided
+        int payMonth = payslip.Month > 0 ? payslip.Month : DateTime.UtcNow.Month;
+        int payYear  = payslip.Year  > 0 ? payslip.Year  : DateTime.UtcNow.Year;
+
         var sql = @"
-            INSERT INTO t_payslips (empid, spaceid, baseamount, deduction, finalamount, type, paymentid, generatedat, basic, totalallowance, totaldeduction, breakdown, paymentmethod, transactionid, accountnumber, bankname, accountholdername, ifsccode, upiid)
-            VALUES (@EmpId, @SpaceId, @BaseAmount, @Deduction, @FinalAmount, 'Payroll', @PaymentId, NOW(), @Basic, @TotalAllowance, @TotalDeduction, @Breakdown, @PaymentMethod, @TransactionId, @AccountNumber, @BankName, @AccountHolderName, @IfscCode, @UpiId);";
-        var rows = await _dbConnection.ExecuteAsync(sql, payslip);
+            INSERT INTO t_payslips (empid, spaceid, baseamount, deduction, finalamount, type, paymentid, generatedat, month, year, basic, totalallowance, totaldeduction, breakdown, paymentmethod, transactionid, accountnumber, bankname, accountholdername, ifsccode, upiid)
+            VALUES (@EmpId, @SpaceId, @BaseAmount, @Deduction, @FinalAmount, 'Payroll', @PaymentId, NOW(), @PayMonth, @PayYear, @Basic, @TotalAllowance, @TotalDeduction, @Breakdown, @PaymentMethod, @TransactionId, @AccountNumber, @BankName, @AccountHolderName, @IfscCode, @UpiId);";
+        var rows = await _dbConnection.ExecuteAsync(sql, new {
+            payslip.EmpId,
+            payslip.SpaceId,
+            payslip.BaseAmount,
+            payslip.Deduction,
+            payslip.FinalAmount,
+            payslip.PaymentId,
+            PayMonth = payMonth,
+            PayYear  = payYear,
+            payslip.Basic,
+            payslip.TotalAllowance,
+            payslip.TotalDeduction,
+            payslip.Breakdown,
+            payslip.PaymentMethod,
+            payslip.TransactionId,
+            payslip.AccountNumber,
+            payslip.BankName,
+            payslip.AccountHolderName,
+            payslip.IfscCode,
+            payslip.UpiId
+        });
         return rows > 0;
     }
 

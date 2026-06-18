@@ -14,6 +14,11 @@ public interface IProjectRepository
     Task<int> CreateProjectAsync(Project project);
     Task<bool> UpdateProjectAsync(Project project);
     Task<bool> DeleteProjectAsync(int projectId);
+    
+    Task<IEnumerable<ProjectFile>> GetProjectFilesAsync(int projectId);
+    Task<int> AddProjectFileAsync(ProjectFile file);
+    Task<ProjectFile?> GetProjectFileByIdAsync(int fileId);
+    Task<bool> DeleteProjectFileAsync(int fileId);
 
     Task<IEnumerable<ProjectTask>> GetTasksByProjectIdAsync(int projectId);
     Task<IEnumerable<ProjectTask>> GetTasksByEmployeeIdAsync(int empid);

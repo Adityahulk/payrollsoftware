@@ -265,11 +265,11 @@ public class AttendanceRepository : IAttendanceRepository
             
         var result = await _dbConnection.QueryFirstOrDefaultAsync<dynamic>(query, new { EmpId = empId });
         
-        if (result == null) return (null, null, null);
+        if (result == null) return (TimeSpan.FromHours(9), TimeSpan.FromHours(18), 8);
 
-        TimeSpan? start = result.workstarttime != null ? TimeSpan.Parse((string)result.workstarttime) : null;
-        TimeSpan? end = result.workendtime != null ? TimeSpan.Parse((string)result.workendtime) : null;
-        int? workingHours = result.workinghours != null ? (int)result.workinghours : null;
+        TimeSpan? start = result.workstarttime != null ? TimeSpan.Parse((string)result.workstarttime) : TimeSpan.FromHours(9);
+        TimeSpan? end = result.workendtime != null ? TimeSpan.Parse((string)result.workendtime) : TimeSpan.FromHours(18);
+        int? workingHours = result.workinghours != null ? (int)result.workinghours : 8;
 
         return (start, end, workingHours);
     }
@@ -283,6 +283,24 @@ public class AttendanceRepository : IAttendanceRepository
     {
         var doj = await GetDateOfJoiningAsync(empId);
         var workingDays = await GetWorkingDaysByEmpIdAsync(empId);
+
+        var spaceIdSql = "SELECT spaceid FROM t_users WHERE empid = @EmpId";
+        var spaceId = await _dbConnection.ExecuteScalarAsync<int>(spaceIdSql, new { EmpId = empId });
+
+        var holidaySql = "SELECT holidaydate::timestamp AS holidaydate FROM t_holidays WHERE spaceid = @SpaceId";
+        var holidaysRaw = await _dbConnection.QueryAsync<dynamic>(holidaySql, new { SpaceId = spaceId });
+        var holidaysSet = new System.Collections.Generic.HashSet<DateTime>();
+        foreach (var h in holidaysRaw ?? System.Linq.Enumerable.Empty<dynamic>())
+        {
+            if (h.holidaydate != null)
+            {
+                DateTime parsedDate;
+                if (DateTime.TryParse(h.holidaydate.ToString(), out parsedDate))
+                {
+                    holidaysSet.Add(parsedDate.Date);
+                }
+            }
+        }
 
         // Generate ALL dates from DOJ to today (no weekend filter - use working days instead)
         var datesSql = @"
@@ -362,6 +380,10 @@ public class AttendanceRepository : IAttendanceRepository
             {
                 monthlyResult.Add(new { date = dt, totalHours = 0, breakHours = 0, status = "Leave", lateMinutes = 0, earlyExitMinutes = 0 });
             }
+            else if (holidaysSet.Contains(dt))
+            {
+                monthlyResult.Add(new { date = dt, totalHours = 0, breakHours = 0, status = "Holiday", lateMinutes = 0, earlyExitMinutes = 0 });
+            }
             else if (!isWorkingDay)
             {
                 // Off day with no clock-in = Off Day (not absent)
@@ -440,5 +462,28 @@ public class AttendanceRepository : IAttendanceRepository
         }
 
         return new List<string> { "Mon", "Tue", "Wed", "Thu", "Fri" };
+    }
+
+    public async Task<IEnumerable<Holiday>> GetHolidaysBySpaceIdAsync(int spaceId)
+    {
+        var query = "SELECT holidayid, holidaydate, name, type, spaceid FROM t_holidays WHERE spaceid = @SpaceId ORDER BY holidaydate ASC;";
+        return await _dbConnection.QueryAsync<Holiday>(query, new { SpaceId = spaceId });
+    }
+
+    public async Task<bool> AddHolidayAsync(Holiday holiday)
+    {
+        var query = @"
+            INSERT INTO t_holidays (holidaydate, name, type, spaceid)
+            VALUES (@HolidayDate, @Name, @Type, @SpaceId)
+            ON CONFLICT (spaceid, holidaydate) DO UPDATE SET name = @Name, type = @Type;";
+        var result = await _dbConnection.ExecuteAsync(query, holiday);
+        return result > 0;
+    }
+
+    public async Task<bool> DeleteHolidayAsync(int holidayId, int spaceId)
+    {
+        var query = "DELETE FROM t_holidays WHERE holidayid = @HolidayId AND spaceid = @SpaceId;";
+        var result = await _dbConnection.ExecuteAsync(query, new { HolidayId = holidayId, SpaceId = spaceId });
+        return result > 0;
     }
 }

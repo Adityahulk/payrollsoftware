@@ -5,219 +5,183 @@ using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Threading.Tasks;
 using Backend.Models;
-using Backend.Repositories;
+using Backend.Services;
+using System.Security.Claims;
 
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class LeaveController : ControllerBase
 {
-    private readonly ILeaveRepository _leaveRepo;
-    private readonly IUserRepository _userRepository;
-    private readonly Backend.Services.INotificationService _notificationService;
+    private readonly ILeaveService _leaveService;
 
-    public LeaveController(ILeaveRepository leaveRepo, IUserRepository userRepository, Backend.Services.INotificationService notificationService)
+    public LeaveController(ILeaveService leaveService)
     {
-        _leaveRepo = leaveRepo;
-        _userRepository = userRepository;
-        _notificationService = notificationService;
+        _leaveService = leaveService;
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────
     private int GetEmpId()
     {
         var claim = User.FindFirst("EmpId")?.Value
-                 ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                 ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         return int.TryParse(claim, out var id) ? id : 0;
     }
 
-    private string GetRole()
+    private int GetSpaceId()
     {
-        return User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value
-            ?? User.FindFirst("role")?.Value
-            ?? "Employee";
+        var role = GetRole();
+        if (role == "Admin")
+        {
+            return GetEmpId();
+        }
+        var claim = User.FindFirst("SpaceId")?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
     }
 
-    private int? GetSpaceId()
-    {
-        var raw = User.FindFirst("SpaceId")?.Value ?? User.FindFirst("spaceid")?.Value;
-        return int.TryParse(raw, out var id) ? id : null;
-    }
+    private string GetRole() => User.FindFirst(ClaimTypes.Role)?.Value ?? "Employee";
 
-    // ─── POST /api/Leave — Apply Leave ────────────────────────────────────────
     [HttpPost]
     public async Task<IActionResult> ApplyLeave([FromBody] LeaveRequest req)
     {
-        try
+        var empId = GetEmpId();
+        var spaceId = GetSpaceId();
+        if (empId == 0) return Unauthorized();
+
+        var (success, error) = await _leaveService.ApplyLeaveAsync(req, empId, spaceId);
+        if (!success)
         {
-            var empId = GetEmpId();
-            if (empId == 0) return Unauthorized();
-
-            if (!DateTime.TryParse(req.LeaveDate, out var leaveDate))
-                return BadRequest(new { message = "Invalid date format. Use YYYY-MM-DD." });
-
-            var validTypes = new[] { "Normal", "Emergency", "College" };
-            if (!Array.Exists(validTypes, t => t == req.LeaveType))
-                return BadRequest(new { message = "Invalid leave type. Must be Normal, Emergency, or College." });
-
-            var leave = new Leave
-            {
-                EmpId     = empId,
-                LeaveDate = leaveDate,
-                Reason    = req.Reason,
-                LeaveType = req.LeaveType ?? "Normal",
-                HalfDay   = req.HalfDay
-            };
-
-            var (success, error) = await _leaveRepo.ApplyLeaveAsync(leave);
-            if (!success)
-            {
-                Console.WriteLine($"[LeaveController.ApplyLeave] Rejected: {error}");
-                return BadRequest(new { message = error });
-            }
-
-            try
-            {
-                var user = await _userRepository.GetUserByIdAsync(empId);
-                if (user != null)
-                {
-                    await _notificationService.NotifyLeaveAppliedAsync(empId, user.Email, user.SpaceId ?? 0, leaveDate, req.Reason ?? "");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Notification Trigger Error] Apply Leave: {ex.Message}");
-            }
-
-            return Ok(new { message = "Leave applied successfully." });
+            return BadRequest(new { message = error });
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[LeaveController.ApplyLeave] EXCEPTION: {ex.Message}\n{ex.StackTrace}");
-            return StatusCode(500, new { message = "An unexpected error occurred." });
-        }
+        return Ok(new { message = "Leave applied successfully." });
     }
 
-    // ─── GET /api/Leave/me — My Leave History ─────────────────────────────────
     [HttpGet("me")]
     public async Task<IActionResult> GetMyLeaves()
     {
-        try
-        {
-            var empId = GetEmpId();
-            if (empId == 0) return Unauthorized();
+        var empId = GetEmpId();
+        if (empId == 0) return Unauthorized();
 
-            var leaves = await _leaveRepo.GetLeavesByEmpIdAsync(empId);
-            return Ok(leaves);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[LeaveController.GetMyLeaves] {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch leave history." });
-        }
+        var leaves = await _leaveService.GetMyLeavesAsync(empId);
+        return Ok(leaves);
     }
 
-    // ─── GET /api/Leave/balance — My Leave Balance ────────────────────────────
     [HttpGet("balance")]
     public async Task<IActionResult> GetLeaveBalance()
     {
+        var empId = GetEmpId();
+        var spaceId = GetSpaceId();
+        var role = GetRole();
+        if (empId == 0) return Unauthorized();
+
         try
         {
-            var empId = GetEmpId();
-            if (empId == 0) return Unauthorized();
-
-            var balance = await _leaveRepo.GetLeaveBalanceAsync(empId);
+            var balance = await _leaveService.GetLeaveBalanceAsync(empId, empId, spaceId, role);
             return Ok(balance);
         }
-        catch (Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            Console.WriteLine($"[LeaveController.GetLeaveBalance] {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch leave balance." });
+            return StatusCode(403, new { message = ex.Message });
         }
     }
 
-    // ─── GET /api/Leave — All Leaves (role-filtered) ──────────────────────────
+    [HttpGet("balance/{empId:int}")]
+    [Authorize(Roles = "Admin,Manager,TeamLead")]
+    public async Task<IActionResult> GetEmployeeLeaveBalance(int empId)
+    {
+        var callerEmpId = GetEmpId();
+        var spaceId = GetSpaceId();
+        var role = GetRole();
+
+        try
+        {
+            var balance = await _leaveService.GetLeaveBalanceAsync(empId, callerEmpId, spaceId, role);
+            return Ok(balance);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+    }
+
     [HttpGet]
     [Authorize(Roles = "Admin,Manager,TeamLead")]
     public async Task<IActionResult> GetAllLeaves()
     {
+        var spaceId = GetSpaceId();
+        var role = GetRole();
+
         try
         {
-            var role    = GetRole();
-            var spaceId = GetSpaceId();
-            var leaves  = await _leaveRepo.GetAllLeavesAsync(spaceId, role);
+            var leaves = await _leaveService.GetAllLeavesAsync(spaceId, role);
             return Ok(leaves);
         }
-        catch (Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            Console.WriteLine($"[LeaveController.GetAllLeaves] {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch leave requests." });
+            return StatusCode(403, new { message = ex.Message });
         }
     }
 
-    // ─── PATCH /api/Leave/{id}/status — Approve / Reject ─────────────────────
-    [HttpPatch("{leaveId}/status")]
+    [HttpPatch("{leaveId:int}/status")]
     [Authorize(Roles = "Admin,Manager,TeamLead")]
     public async Task<IActionResult> UpdateStatus(int leaveId, [FromBody] UpdateLeaveStatusRequest req)
     {
+        var empId = GetEmpId();
+        var spaceId = GetSpaceId();
+        var role = GetRole();
+        if (empId == 0) return Unauthorized();
+
         try
         {
-            var empId = GetEmpId();
-            if (empId == 0) return Unauthorized();
-
-            var validStatuses = new[] { "Approved", "Rejected", "Pending" };
-            if (!Array.Exists(validStatuses, s => s == req.Status))
-                return BadRequest(new { message = "Invalid status. Must be Approved, Rejected, or Pending." });
-
-            var success = await _leaveRepo.UpdateLeaveStatusAsync(leaveId, req.Status, empId);
+            var success = await _leaveService.UpdateLeaveStatusAsync(leaveId, req.Status, empId, spaceId, role);
             if (!success) return NotFound(new { message = "Leave record not found." });
 
             return Ok(new { message = $"Leave {req.Status.ToLower()} successfully." });
         }
-        catch (Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            Console.WriteLine($"[LeaveController.UpdateStatus] {ex.Message}");
-            return StatusCode(500, new { message = "Failed to update leave status." });
+            return StatusCode(403, new { message = ex.Message });
         }
     }
 
-    // ─── GET /api/Leave/config/{spaceId} — Space Leave Policy ────────────────
-    [HttpGet("config/{spaceId}")]
+    [HttpGet("config/{spaceId:int}")]
     [Authorize(Roles = "Admin,Manager")]
     public async Task<IActionResult> GetLeaveConfig(int spaceId)
     {
+        var callerSpaceId = GetSpaceId();
+        var role = GetRole();
+
         try
         {
-            var config = await _leaveRepo.GetSpaceLeaveConfigAsync(spaceId);
+            var config = await _leaveService.GetSpaceLeaveConfigAsync(spaceId, callerSpaceId, role);
             return Ok(config);
         }
-        catch (Exception ex)
+        catch (UnauthorizedAccessException ex)
         {
-            Console.WriteLine($"[LeaveController.GetLeaveConfig] {ex.Message}");
-            return StatusCode(500, new { message = "Failed to fetch leave configuration." });
+            return StatusCode(403, new { message = ex.Message });
         }
     }
 
-    // ─── PUT /api/Leave/config/{spaceId} — Update Space Leave Policy ──────────
-    [HttpPut("config/{spaceId}")]
+    [HttpPut("config/{spaceId:int}")]
     [Authorize(Roles = "Admin,Manager")]
     public async Task<IActionResult> UpdateLeaveConfig(int spaceId, [FromBody] SpaceLeaveConfig config)
     {
+        var callerSpaceId = GetSpaceId();
+        var role = GetRole();
+
         try
         {
-            config.SpaceId = spaceId;
-            if (config.EmergencyLeavesPerMonth < 0 || config.CollegeLeavesPerMonth < 0)
-                return BadRequest(new { message = "Leave limits cannot be negative." });
-
-            var success = await _leaveRepo.UpsertSpaceLeaveConfigAsync(config);
+            var success = await _leaveService.UpdateLeaveConfigAsync(spaceId, config, callerSpaceId, role);
             if (!success) return BadRequest(new { message = "Failed to save leave configuration." });
 
             return Ok(new { message = "Leave policy updated successfully." });
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
         catch (Exception ex)
         {
-            Console.WriteLine($"[LeaveController.UpdateLeaveConfig] {ex.Message}");
-            return StatusCode(500, new { message = "Failed to update leave configuration." });
+            return BadRequest(new { message = ex.Message });
         }
     }
 }

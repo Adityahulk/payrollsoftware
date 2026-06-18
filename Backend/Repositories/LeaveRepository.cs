@@ -168,7 +168,7 @@ public class LeaveRepository : ILeaveRepository
         try
         {
             string whereClause = role.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-                ? ""
+                ? "WHERE l.spaceid IN (SELECT spaceid FROM t_spaces WHERE adminid = @SpaceId AND isactive = TRUE)"
                 : "WHERE l.spaceid = @SpaceId";
 
             var sql = $@"
@@ -215,6 +215,25 @@ public class LeaveRepository : ILeaveRepository
         {
             Console.WriteLine($"[LeaveRepository.UpdateLeaveStatus] Error: {ex.Message}");
             return false;
+        }
+    }
+
+    // ─── Get Leave By Id ──────────────────────────────────────────────────────
+    public async Task<Leave?> GetLeaveByIdAsync(int leaveId)
+    {
+        try
+        {
+            var sql = @"
+                SELECT leaveid, empid, spaceid, leavedate::timestamp AS leavedate,
+                       reason, status, leavetype, halfday, createdat, approvedby
+                FROM t_leaves
+                WHERE leaveid = @LeaveId";
+            return await _db.QueryFirstOrDefaultAsync<Leave>(sql, new { LeaveId = leaveId });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[LeaveRepository.GetLeaveById] Error: {ex.Message}");
+            return null;
         }
     }
 

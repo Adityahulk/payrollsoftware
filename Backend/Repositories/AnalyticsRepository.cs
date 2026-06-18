@@ -40,14 +40,26 @@ public class AnalyticsRepository : IAnalyticsRepository
         }
         if (totalWorkingDays == 0) totalWorkingDays = 1;
 
-        // Attendance stats
+        // Attendance stats (only working days, excluding status = 'Absent')
+        var isodowList = new List<int>();
+        foreach (var wd in workingDays)
+        {
+            int dow = wd.ToLower() switch
+            {
+                "mon" => 1, "tue" => 2, "wed" => 3, "thu" => 4, "fri" => 5, "sat" => 6, "sun" => 7, _ => 0
+            };
+            if (dow > 0) isodowList.Add(dow);
+        }
+
         var attSql = @"
-            SELECT COUNT(*) as presentDays, 
+            SELECT COUNT(DISTINCT DATE(attendancedate)) as presentDays, 
                    COALESCE(SUM(lateminutes), 0) as lateMinutes, 
                    COALESCE(SUM(earlyexitminutes), 0) as earlyExitMinutes 
             FROM t_attendance 
-            WHERE empid = @EmpId";
-        var attStats = await _db.QueryFirstOrDefaultAsync<dynamic>(attSql, new { EmpId = empId });
+            WHERE empid = @EmpId
+              AND COALESCE(status, '') != 'Absent'
+              AND EXTRACT(ISODOW FROM attendancedate) = ANY(@Dows)";
+        var attStats = await _db.QueryFirstOrDefaultAsync<dynamic>(attSql, new { EmpId = empId, Dows = isodowList.ToArray() });
         int presentDays = Convert.ToInt32(attStats?.presentdays ?? 0);
         int lateMinutes = Convert.ToInt32(attStats?.lateminutes ?? 0);
         int earlyExitMinutes = Convert.ToInt32(attStats?.earlyexitminutes ?? 0);
@@ -224,7 +236,7 @@ public class AnalyticsRepository : IAnalyticsRepository
         // Dynamic absence calculation for current month
         {
             var attDatesSql = @"SELECT DATE(attendancedate)::timestamp FROM t_attendance 
-                WHERE empid = @EmpId AND attendancedate >= @Start AND attendancedate <= @End";
+                WHERE empid = @EmpId AND COALESCE(status, '') != 'Absent' AND attendancedate >= @Start AND attendancedate <= @End";
             var attDatesRaw = await _db.QueryAsync<DateTime?>(attDatesSql, new { EmpId = empId, Start = start.Date, End = end.Date });
             var attDatesSet = new HashSet<DateTime>((attDatesRaw ?? System.Linq.Enumerable.Empty<DateTime?>())
                 .Where(d => d.HasValue)

@@ -55,3 +55,15 @@ Thumbs.db
 # =========================
 *.tmp
 *.temp
+
+# =========================
+# Local Uploads & Temp Files
+# =========================
+DETAIl.txt
+context.txt
+scratch/
+Backend/wwwroot/LiveMonitoring/
+Backend/wwwroot/project-files/
+Backend/wwwroot/payslip-logo/
+Backend/wwwroot/profile-photo/
+**/Screenshot*.png

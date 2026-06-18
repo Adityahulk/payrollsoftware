@@ -13,6 +13,7 @@ public interface ILeaveRepository
     // Admin / Manager / TL actions
     Task<IEnumerable<dynamic>> GetAllLeavesAsync(int? spaceId, string role);
     Task<bool> UpdateLeaveStatusAsync(int leaveId, string status, int approvedByEmpId);
+    Task<Leave?> GetLeaveByIdAsync(int leaveId);
 
     // Space leave policy (Admin/Manager configures)
     Task<SpaceLeaveConfig> GetSpaceLeaveConfigAsync(int spaceId);

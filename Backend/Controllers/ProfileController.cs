@@ -5,8 +5,12 @@ using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System;
 using Backend.Models;
 using Backend.Repositories;
+using Backend.Services;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -14,13 +18,13 @@ using Backend.Repositories;
 public class ProfileController : ControllerBase
 {
     private readonly IProfileRepository _profileRepo;
-    private readonly IUserRepository _userRepository;
+    private readonly IUserService _userService;
     private readonly IWebHostEnvironment _env;
 
-    public ProfileController(IProfileRepository profileRepo, IUserRepository userRepository, IWebHostEnvironment env)
+    public ProfileController(IProfileRepository profileRepo, IUserService userService, IWebHostEnvironment env)
     {
         _profileRepo = profileRepo;
-        _userRepository = userRepository;
+        _userService = userService;
         _env = env;
     }
 
@@ -31,24 +35,36 @@ public class ProfileController : ControllerBase
         return int.TryParse(claim, out var id) ? id : 0;
     }
 
-    private string GetRole() =>
-        User.FindFirst(ClaimTypes.Role)?.Value
-        ?? User.FindFirst("http://schemas.microsoft.com/ws/2008/06/identity/claims/role")?.Value
-        ?? "";
+    private int GetSpaceId()
+    {
+        var claim = User.FindFirst("SpaceId")?.Value;
+        return int.TryParse(claim, out var id) ? id : 0;
+    }
 
-    // ──────────────────────────────────────────────────────────────────
+    private string GetRole() => User.FindFirst(ClaimTypes.Role)?.Value ?? "";
+
     // GET /api/Profile/photo/{empId}
-    // ──────────────────────────────────────────────────────────────────
-    [HttpGet("photo/{empId}")]
+    [HttpGet("photo/{empId:int}")]
     [Authorize]
     public async Task<IActionResult> GetProfilePhoto(int empId)
     {
         var currentEmpId = GetEmpId();
-        
-        // Secure version: Only allow the logged-in user (or admins/managers if needed, but keeping it strict as requested)
+        var spaceId = GetSpaceId();
         var role = GetRole();
-        if (currentEmpId != empId && role != "Admin" && role != "Manager" && role != "TeamLead")
-            return Unauthorized();
+        
+        // Security check using Service Layer
+        try
+        {
+            if (currentEmpId != empId)
+            {
+                var targetUser = await _userService.GetUserByIdAsync(empId, spaceId, role);
+                if (targetUser == null) return NotFound();
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
 
         var profile = await _profileRepo.GetProfileAsync(empId);
         if (profile == null || string.IsNullOrEmpty(profile.ProfilePhotoUrl))
@@ -77,7 +93,6 @@ public class ProfileController : ControllerBase
     }
 
     // GET /api/Profile/me
-    // ──────────────────────────────────────────────────────────────────
     [HttpGet("me")]
     public async Task<IActionResult> GetMyProfile()
     {
@@ -89,33 +104,42 @@ public class ProfileController : ControllerBase
 
         if (!string.IsNullOrEmpty(profile.ProfilePhotoUrl))
         {
-            profile.ProfilePhotoUrl = $"http://localhost:5125/api/Profile/photo/{profile.EmpId}";
+            profile.ProfilePhotoUrl = $"/api/Profile/photo/{profile.EmpId}";
         }
 
         return Ok(profile);
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // GET /api/Profile/{empId}  — Admin/Manager/TL read-only
-    // ──────────────────────────────────────────────────────────────────
+    // GET /api/Profile/{empId} — Admin/Manager/TL read-only
     [HttpGet("{empId:int}")]
     [Authorize(Roles = "Admin,Manager,TeamLead")]
     public async Task<IActionResult> GetProfileByEmpId(int empId)
     {
+        var spaceId = GetSpaceId();
+        var role = GetRole();
+
+        try
+        {
+            var targetUser = await _userService.GetUserByIdAsync(empId, spaceId, role);
+            if (targetUser == null) return NotFound(new { message = "Profile not found." });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { message = ex.Message });
+        }
+
         var profile = await _profileRepo.GetProfileAsync(empId);
         if (profile == null) return NotFound(new { message = "Profile not found." });
 
         if (!string.IsNullOrEmpty(profile.ProfilePhotoUrl))
         {
-            profile.ProfilePhotoUrl = $"http://localhost:5125/api/Profile/photo/{profile.EmpId}";
+            profile.ProfilePhotoUrl = $"/api/Profile/photo/{profile.EmpId}";
         }
 
         return Ok(profile);
     }
 
-    // ──────────────────────────────────────────────────────────────────
     // PUT /api/Profile/update/{empId?}
-    // ──────────────────────────────────────────────────────────────────
     [HttpPut("update/{empId:int?}")]
     public async Task<IActionResult> UpdateProfile(int? empId, [FromBody] UpdateProfileRequest request)
     {
@@ -123,28 +147,37 @@ public class ProfileController : ControllerBase
         if (currentEmpId == 0) return Unauthorized(new { message = "Invalid token." });
 
         int targetEmpId = currentEmpId;
+        var spaceId = GetSpaceId();
+        var role = GetRole();
+
         if (empId.HasValue)
         {
-            var role = GetRole();
-            if (role != "Admin")
+            if (role != "Admin" && role != "SuperAdmin")
             {
-                return Forbid();
+                return StatusCode(403, new { message = "Access denied." });
             }
             targetEmpId = empId.Value;
+            try
+            {
+                var targetUser = await _userService.GetUserByIdAsync(targetEmpId, spaceId, role);
+                if (targetUser == null) return NotFound(new { message = "Employee not found." });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(403, new { message = ex.Message });
+            }
         }
 
-        // Email and Role cannot be changed via this endpoint — enforced by repository
+        // Email and Role cannot be changed via this endpoint
         var updated = await _profileRepo.UpdateProfileAsync(targetEmpId, request);
         if (!updated) return NotFound(new { message = "Profile not found or no changes made." });
 
         return Ok(new { message = "Profile updated successfully." });
     }
 
-    // ──────────────────────────────────────────────────────────────────
     // POST /api/Profile/photo
-    // ──────────────────────────────────────────────────────────────────
     [HttpPost("photo")]
-    public async Task<IActionResult> UploadPhoto([FromForm] IFormFile file)
+    public async Task<IActionResult> UploadPhoto(IFormFile file)
     {
         var empId = GetEmpId();
         if (empId == 0) return Unauthorized(new { message = "Invalid token." });
@@ -160,7 +193,6 @@ public class ProfileController : ControllerBase
         if (file.Length > 5 * 1024 * 1024)
             return BadRequest(new { message = "File size must be under 5 MB." });
 
-        // Save to D:\Phase2\Backend\wwwroot\profile-photo\
         var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
         var folder = Path.Combine(webRoot, "profile-photo");
         Directory.CreateDirectory(folder);
@@ -176,16 +208,14 @@ public class ProfileController : ControllerBase
         var relativeUrl = $"/profile-photo/{fileName}";
         await _profileRepo.UpdateProfilePhotoAsync(empId, relativeUrl);
 
-        return Ok(new { message = "Photo uploaded successfully.", photoUrl = $"http://localhost:5125/api/Profile/photo/{empId}" });
+        return Ok(new { message = "Photo uploaded successfully.", photoUrl = $"/api/Profile/photo/{empId}" });
     }
 
-    // ──────────────────────────────────────────────────────────────────
     // POST /api/Profile/documents
-    // ──────────────────────────────────────────────────────────────────
     [HttpPost("documents")]
     public async Task<IActionResult> UploadDocuments([FromForm] List<string> documentTypes,
                                                       [FromForm] List<string> documentNumbers,
-                                                      [FromForm] List<IFormFile> files)
+                                                      List<IFormFile> files)
     {
         var empId = GetEmpId();
         if (empId == 0) return Unauthorized(new { message = "Invalid token." });
@@ -196,23 +226,19 @@ public class ProfileController : ControllerBase
         if (documentTypes.Count != documentNumbers.Count || documentTypes.Count != files.Count)
             return BadRequest(new { message = "documentTypes, documentNumbers, and files arrays must have equal length." });
 
-        // Fetch existing documents to check if mandatory docs are already saved
         var existingDocs = await _profileRepo.GetDocumentsByEmpIdAsync(empId);
         bool hasPan = existingDocs.Any(d => d.DocumentType.Trim().Equals("PAN", StringComparison.OrdinalIgnoreCase));
         bool hasAadhar = existingDocs.Any(d => d.DocumentType.Trim().Equals("Aadhar", StringComparison.OrdinalIgnoreCase));
 
-        // Only require PAN/Aadhar if they don't already exist in the database
         var upperTypes = documentTypes.Select(t => t.Trim().ToUpper()).ToList();
         if (!hasPan && !upperTypes.Contains("PAN"))
             return BadRequest(new { message = "PAN document is mandatory." });
         if (!hasAadhar && !upperTypes.Contains("AADHAR"))
             return BadRequest(new { message = "Aadhar document is mandatory." });
 
-        // Check for duplicates within request
         if (upperTypes.Distinct().Count() != upperTypes.Count)
             return BadRequest(new { message = "Duplicate document types are not allowed." });
 
-        // Validate file sizes
         foreach (var f in files)
             if (f.Length > 10 * 1024 * 1024)
                 return BadRequest(new { message = $"File '{f.FileName}' exceeds 10 MB limit." });
@@ -251,9 +277,7 @@ public class ProfileController : ControllerBase
         return Ok(new { message = "Documents saved successfully.", documents = savedDocs });
     }
 
-    // ──────────────────────────────────────────────────────────────────
     // GET /api/Profile/documents
-    // ──────────────────────────────────────────────────────────────────
     [HttpGet("documents")]
     public async Task<IActionResult> GetMyDocuments()
     {
@@ -263,9 +287,7 @@ public class ProfileController : ControllerBase
         return Ok(docs);
     }
 
-    // ──────────────────────────────────────────────────────────────────
     // DELETE /api/Profile/documents/{docId}
-    // ──────────────────────────────────────────────────────────────────
     [HttpDelete("documents/{docId:int}")]
     public async Task<IActionResult> DeleteDocument(int docId)
     {
@@ -274,15 +296,6 @@ public class ProfileController : ControllerBase
         var deleted = await _profileRepo.DeleteDocumentAsync(docId, empId);
         if (!deleted) return NotFound(new { message = "Document not found." });
         return Ok(new { message = "Document deleted." });
-    }
-
-    [HttpGet("debug-photos")]
-    [AllowAnonymous]
-    public async Task<IActionResult> DebugPhotos([FromServices] System.Data.IDbConnection db)
-    {
-        var sql = "SELECT empid, profilephotourl FROM t_users";
-        var results = await Dapper.SqlMapper.QueryAsync(db, sql);
-        return Ok(results);
     }
 
     [HttpPost("update-backup-email")]
@@ -299,7 +312,7 @@ public class ProfileController : ControllerBase
             if (!System.Text.RegularExpressions.Regex.IsMatch(request.BackupEmail, @"^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$"))
                 return BadRequest(new { message = "Invalid backup email format." });
 
-            var success = await _userRepository.UpdateBackupEmailAsync(empId, request.BackupEmail);
+            var success = await _userService.UpdateBackupEmailAsync(empId, request.BackupEmail);
             if (!success)
                 return NotFound(new { message = "Profile not found." });
 
@@ -326,19 +339,9 @@ public class ProfileController : ControllerBase
             if (request.NewPassword.Length < 6)
                 return BadRequest(new { message = "New password must be at least 6 characters long." });
 
-            var user = await _userRepository.GetUserByIdAsync(empId);
-            if (user == null) return NotFound(new { message = "User not found." });
-
-            var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<User>();
-            var verifyResult = hasher.VerifyHashedPassword(user, user.PasswordHash ?? "", request.OldPassword);
-            if (verifyResult == Microsoft.AspNetCore.Identity.PasswordVerificationResult.Failed)
-            {
-                if ((user.PasswordHash ?? "").Trim() != request.OldPassword.Trim())
-                    return BadRequest(new { message = "Incorrect old password." });
-            }
-
-            string hashedNew = hasher.HashPassword(user, request.NewPassword);
-            await _userRepository.UpdatePasswordHashAsync(empId, hashedNew);
+            var success = await _userService.ChangePasswordAsync(empId, request.OldPassword, request.NewPassword);
+            if (!success)
+                return BadRequest(new { message = "Incorrect old password or user not found." });
 
             return Ok(new { message = "Password updated successfully." });
         }

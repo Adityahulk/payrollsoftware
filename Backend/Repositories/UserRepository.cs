@@ -258,4 +258,15 @@ public class UserRepository : IUserRepository
         var result = await _dbConnection.ExecuteAsync(query, new { OtpId = otpId });
         return result > 0;
     }
+
+    public async Task<bool> IsUserUnderAdminAsync(int targetEmpId, int adminEmpId)
+    {
+        var query = @"
+            SELECT COUNT(1)
+            FROM t_users u
+            JOIN t_spaces s ON u.spaceid = s.spaceid
+            WHERE u.empid = @TargetEmpId AND s.adminid = @AdminEmpId AND s.isactive = TRUE";
+        var count = await _dbConnection.ExecuteScalarAsync<int>(query, new { TargetEmpId = targetEmpId, AdminEmpId = adminEmpId });
+        return count > 0;
+    }
 }

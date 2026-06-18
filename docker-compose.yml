@@ -1,0 +1,41 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: payroll_postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: payroll_db
+      TZ: Asia/Kolkata
+    ports:
+      - "5433:5432"
+    volumes:
+      - payroll_postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d payroll_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./Backend
+    container_name: payroll_backend_app
+    depends_on:
+      - postgres
+    environment:
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__DefaultConnection=Host=payroll_postgres_db;Port=5432;Database=payroll_db;Username=postgres;Password=postgres
+      - TZ=Asia/Kolkata
+    ports:
+      - "5000:80"
+    volumes:
+      - ./Backend/wwwroot:/app/wwwroot
+
+volumes:
+  payroll_postgres_data:

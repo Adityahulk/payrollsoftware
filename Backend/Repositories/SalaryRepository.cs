@@ -76,6 +76,7 @@ public class SalaryRepository : ISalaryRepository
             SELECT DATE(attendancedate)::timestamp AS adate
             FROM t_attendance
             WHERE empid = @EmpId
+              AND COALESCE(status, '') != 'Absent'
               AND EXTRACT(MONTH FROM attendancedate) = @Month
               AND EXTRACT(YEAR FROM attendancedate) = @Year;
 
@@ -94,7 +95,15 @@ public class SalaryRepository : ISalaryRepository
             FROM t_projecttasks t
             LEFT JOIN t_worklogs w ON t.taskid = w.taskid AND w.empid = @EmpId
             WHERE t.assignedtoempid = @EmpId
-            GROUP BY t.taskid, t.taskstatus, t.estimatedhours;";
+            GROUP BY t.taskid, t.taskstatus, t.estimatedhours;
+
+            -- Q9: holidays this month
+            SELECT holidaydate::timestamp AS hdate
+            FROM t_holidays
+            WHERE spaceid = (SELECT spaceid FROM t_users WHERE empid = @EmpId)
+              AND EXTRACT(MONTH FROM holidaydate) = @Month
+              AND EXTRACT(YEAR FROM holidaydate) = @Year;
+            ";
 
         decimal? basicVal = null;
         dynamic? userRow = null;
@@ -103,6 +112,7 @@ public class SalaryRepository : ISalaryRepository
         IEnumerable<dynamic> attendanceRecords = Enumerable.Empty<dynamic>();
         HashSet<DateTime> attDatesSet = new();
         HashSet<DateTime> leaveDatesSet = new();
+        HashSet<DateTime> holidayDatesSet = new();
         IEnumerable<dynamic> taskRecords = Enumerable.Empty<dynamic>();
 
         try
@@ -118,6 +128,7 @@ public class SalaryRepository : ISalaryRepository
             var attDatesRaw  = (await multi.ReadAsync<dynamic>()).AsList();
             var leaveDatesRaw= (await multi.ReadAsync<dynamic>()).AsList();
             taskRecords      = (await multi.ReadAsync<dynamic>()).AsList();
+            var holidayDatesRaw = (await multi.ReadAsync<dynamic>()).AsList();
 
             DateTime parsedDoj = DateTime.MinValue;
             if (dojRaw?.doj != null && DateTime.TryParse(dojRaw.doj.ToString(), out parsedDoj))
@@ -134,6 +145,12 @@ public class SalaryRepository : ISalaryRepository
                 DateTime ld = DateTime.MinValue;
                 if (d?.ldate != null && DateTime.TryParse(d.ldate.ToString(), out ld))
                     leaveDatesSet.Add(ld.Date);
+            }
+            foreach (var d in holidayDatesRaw)
+            {
+                DateTime hd = DateTime.MinValue;
+                if (d?.hdate != null && DateTime.TryParse(d.hdate.ToString(), out hd))
+                    holidayDatesSet.Add(hd.Date);
             }
         }
         catch (Exception ex)
@@ -161,6 +178,24 @@ public class SalaryRepository : ISalaryRepository
                   WHERE t.assignedtoempid=@EmpId
                   GROUP BY t.taskid, t.taskstatus, t.estimatedhours",
                 new { EmpId = empId });
+            var holidaySql = @"
+                SELECT holidaydate::timestamp AS hdate
+                FROM t_holidays
+                WHERE spaceid = (SELECT spaceid FROM t_users WHERE empid = @EmpId)
+                  AND EXTRACT(MONTH FROM holidaydate) = @Month
+                  AND EXTRACT(YEAR FROM holidaydate) = @Year;";
+            var holidaysRaw = await _db.QueryAsync<dynamic>(holidaySql, new { EmpId = empId, Month = month, Year = year });
+            foreach (var h in holidaysRaw ?? Enumerable.Empty<dynamic>())
+            {
+                if (h.hdate != null)
+                {
+                    DateTime parsedDate;
+                    if (DateTime.TryParse(h.hdate.ToString(), out parsedDate))
+                    {
+                        holidayDatesSet.Add(parsedDate.Date);
+                    }
+                }
+            }
         }
 
         string role = userRow?.role ?? "Employee";
@@ -340,6 +375,7 @@ public class SalaryRepository : ISalaryRepository
                 if (!salaryWorkingDays.Contains(dayName, StringComparer.OrdinalIgnoreCase)) continue;
                 if (attDatesSet.Contains(d.Date))   continue;
                 if (leaveDatesSet.Contains(d.Date)) continue;
+                if (holidayDatesSet.Contains(d.Date)) continue;
                 absentCount++;
             }
         }
@@ -440,7 +476,19 @@ public class SalaryRepository : ISalaryRepository
                         COALESCE(SUM(w.hoursworked), 0) AS actualhours
                     FROM t_projecttasks t
                     LEFT JOIN t_worklogs w ON t.taskid = w.taskid AND w.empid = @EmpId
+                        AND EXTRACT(MONTH FROM w.workdate) = EXTRACT(MONTH FROM CURRENT_DATE)
+                        AND EXTRACT(YEAR FROM w.workdate) = EXTRACT(YEAR FROM CURRENT_DATE)
                     WHERE t.assignedtoempid = @EmpId
+                      AND (
+                          t.taskstatus NOT IN ('Completed', 'Complete', 'Resolve')
+                          OR (EXTRACT(MONTH FROM t.completedat) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM t.completedat) = EXTRACT(YEAR FROM CURRENT_DATE))
+                          OR t.taskid IN (
+                              SELECT DISTINCT taskid FROM t_worklogs 
+                              WHERE empid = @EmpId 
+                                AND EXTRACT(MONTH FROM workdate) = EXTRACT(MONTH FROM CURRENT_DATE)
+                                AND EXTRACT(YEAR FROM workdate) = EXTRACT(YEAR FROM CURRENT_DATE)
+                          )
+                      )
                     GROUP BY t.taskid, t.taskstatus, t.estimatedhours
                 )
                 SELECT 
@@ -462,22 +510,135 @@ public class SalaryRepository : ISalaryRepository
         decimal hoursWorked = 0;
         try
         {
-            var hoursSql = @"SELECT COALESCE(SUM(hoursworked), 0) FROM t_worklogs WHERE empid = @EmpId";
+            var hoursSql = @"
+                SELECT COALESCE(SUM(hoursworked), 0) 
+                FROM t_worklogs 
+                WHERE empid = @EmpId
+                  AND EXTRACT(MONTH FROM workdate) = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND EXTRACT(YEAR FROM workdate) = EXTRACT(YEAR FROM CURRENT_DATE)";
             hoursWorked = Convert.ToDecimal(await _db.ExecuteScalarAsync(hoursSql, new { EmpId = empId }) ?? 0);
         }
         catch { }
 
-        // Attendance %
+        // Attendance % — calculate based on actual working days from DOJ to today
         decimal attendancePct = 0;
+        int daysPresent = 0, absentDays = 0, lateDays = 0, earlyExitDays = 0, approvedLeaves = 0, totalWorkingDays = 0;
+        DateTime empDoj = DateTime.Today;
         try
         {
-            var attSql = @"
-                SELECT 
-                    CASE WHEN COUNT(*) = 0 THEN 0
-                    ELSE ROUND(COUNT(*) FILTER (WHERE status = 'Present') * 100.0 / COUNT(*), 1)
-                    END
-                FROM t_attendance WHERE empid = @EmpId";
-            attendancePct = Convert.ToDecimal(await _db.ExecuteScalarAsync(attSql, new { EmpId = empId }) ?? 0);
+            // Get employee's date of joining
+            var dojSql = "SELECT COALESCE(dateofjoining, CURRENT_DATE)::timestamp FROM t_users WHERE empid = @EmpId";
+            var dojRaw = await _db.ExecuteScalarAsync(dojSql, new { EmpId = empId });
+            empDoj = dojRaw != null ? Convert.ToDateTime(dojRaw) : DateTime.Today;
+            if (empDoj == default) empDoj = DateTime.Today;
+
+            // Get space working days configuration
+            var wdSql = @"
+                SELECT s.workingdays 
+                FROM t_spaces s
+                INNER JOIN t_users u ON u.spaceid = s.spaceid
+                WHERE u.empid = @EmpId";
+            var wdRaw = await _db.QueryFirstOrDefaultAsync<string>(wdSql, new { EmpId = empId });
+            List<string> workingDays;
+            if (!string.IsNullOrWhiteSpace(wdRaw))
+            {
+                try { workingDays = System.Text.Json.JsonSerializer.Deserialize<List<string>>(wdRaw) ?? new List<string> { "Mon","Tue","Wed","Thu","Fri" }; }
+                catch { workingDays = new List<string> { "Mon","Tue","Wed","Thu","Fri" }; }
+            }
+            else workingDays = new List<string> { "Mon","Tue","Wed","Thu","Fri" };
+
+            // Get attendance dates this month
+            var attDatesSql = @"
+                SELECT DATE(attendancedate)::timestamp AS adate
+                FROM t_attendance
+                WHERE empid = @EmpId
+                  AND COALESCE(status, '') != 'Absent'
+                  AND EXTRACT(MONTH FROM attendancedate) = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND EXTRACT(YEAR FROM attendancedate) = EXTRACT(YEAR FROM CURRENT_DATE)";
+            var attDatesRaw = (await _db.QueryAsync<dynamic>(attDatesSql, new { EmpId = empId })).AsList();
+            var attDatesSet = new HashSet<DateTime>();
+            foreach (var d in attDatesRaw)
+            {
+                DateTime ad = DateTime.MinValue;
+                if (d?.adate != null && DateTime.TryParse(d.adate.ToString(), out ad))
+                    attDatesSet.Add(ad.Date);
+            }
+
+            // Get approved leave dates this month
+            var leaveDatesSql = @"
+                SELECT leavedate::timestamp AS ldate
+                FROM t_leaves
+                WHERE empid = @EmpId
+                  AND status = 'Approved'
+                  AND EXTRACT(MONTH FROM leavedate) = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND EXTRACT(YEAR FROM leavedate) = EXTRACT(YEAR FROM CURRENT_DATE)";
+            var leaveDatesRaw = (await _db.QueryAsync<dynamic>(leaveDatesSql, new { EmpId = empId })).AsList();
+            var leaveDatesSet = new HashSet<DateTime>();
+            foreach (var d in leaveDatesRaw)
+            {
+                DateTime ld = DateTime.MinValue;
+                if (d?.ldate != null && DateTime.TryParse(d.ldate.ToString(), out ld))
+                    leaveDatesSet.Add(ld.Date);
+            }
+
+            // Get holiday dates this month
+            var holidayDatesSql = @"
+                SELECT holidaydate::timestamp AS hdate
+                FROM t_holidays
+                WHERE spaceid = (SELECT spaceid FROM t_users WHERE empid = @EmpId)
+                  AND EXTRACT(MONTH FROM holidaydate) = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND EXTRACT(YEAR FROM holidaydate) = EXTRACT(YEAR FROM CURRENT_DATE)";
+            var holidayDatesRaw = (await _db.QueryAsync<dynamic>(holidayDatesSql, new { EmpId = empId })).AsList();
+            var holidayDatesSet = new HashSet<DateTime>();
+            foreach (var d in holidayDatesRaw)
+            {
+                DateTime hd = DateTime.MinValue;
+                if (d?.hdate != null && DateTime.TryParse(d.hdate.ToString(), out hd))
+                    holidayDatesSet.Add(hd.Date);
+            }
+
+            // Calculate total working days from DOJ (or month start) to today
+            var now = DateTime.Today;
+            var mStart = new DateTime(now.Year, now.Month, 1);
+            var mEnd = now; // Only count up to today, not the full month
+            if (mStart < empDoj.Date) mStart = empDoj.Date; // Start from DOJ if employee joined this month
+
+            daysPresent = 0;
+
+            for (var d = mStart; d <= mEnd; d = d.AddDays(1))
+            {
+                string dayName = Space.DayOfWeekToShortName(d.DayOfWeek);
+                if (!workingDays.Contains(dayName, StringComparer.OrdinalIgnoreCase)) continue;
+                if (holidayDatesSet.Contains(d.Date)) continue;
+                totalWorkingDays++;
+                if (attDatesSet.Contains(d.Date)) daysPresent++;
+                else if (leaveDatesSet.Contains(d.Date)) approvedLeaves++;
+            }
+
+            // Attendance % = (days present + approved leaves) / total working days * 100
+            if (totalWorkingDays > 0)
+            {
+                attendancePct = Math.Round((daysPresent + approvedLeaves) * 100.0m / totalWorkingDays, 1);
+                if (attendancePct > 100m) attendancePct = 100m;
+            }
+
+            // Count late and early exit days this month
+            var attDetailsSql = @"
+                SELECT lateminutes, earlyexitminutes
+                FROM t_attendance
+                WHERE empid = @EmpId
+                  AND EXTRACT(MONTH FROM attendancedate) = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND EXTRACT(YEAR FROM attendancedate) = EXTRACT(YEAR FROM CURRENT_DATE)";
+            var attDetails = (await _db.QueryAsync<dynamic>(attDetailsSql, new { EmpId = empId })).AsList();
+            foreach (var att in attDetails)
+            {
+                int lm = Convert.ToInt32(att.lateminutes ?? 0);
+                if (lm > 5) lateDays++;
+                int em = Convert.ToInt32(att.earlyexitminutes ?? 0);
+                if (em > 0) earlyExitDays++;
+            }
+
+            absentDays = Math.Max(0, totalWorkingDays - daysPresent - approvedLeaves);
         }
         catch { }
 
@@ -487,7 +648,14 @@ public class SalaryRepository : ISalaryRepository
             CompletedTasks = completed,
             PendingTasks = total - completed,
             TotalHoursWorked = hoursWorked,
-            AttendancePercentage = attendancePct
+            AttendancePercentage = attendancePct,
+            DaysPresent = daysPresent,
+            DaysAbsent = absentDays,
+            LateDays = lateDays,
+            EarlyExitDays = earlyExitDays,
+            ApprovedLeaves = approvedLeaves,
+            TotalWorkingDays = totalWorkingDays,
+            DateOfJoining = empDoj.ToString("yyyy-MM-dd")
         };
     }
 
@@ -541,22 +709,24 @@ public class SalaryRepository : ISalaryRepository
     public async Task<IEnumerable<Payslip>> GetMyPayslipsAsync(int empId, int limit = 24)
     {
         var sql = @"
-            SELECT slipid, empid, spaceid, baseamount, deduction, finalamount, type,
-                   paymentid, generatedat, basic, totalallowance, totaldeduction,
-                   breakdown, paymentmethod, transactionid,
-                   accountnumber, bankname, accountholdername, ifsccode, upiid
-            FROM t_payslips
-            WHERE empid = @EmpId AND type = 'Payroll'
-            ORDER BY generatedat DESC
+            SELECT p.slipid, p.empid, p.spaceid, p.baseamount, p.deduction, p.finalamount, p.type,
+                   p.paymentid, p.generatedat, p.month, p.year, p.basic, p.totalallowance, p.totaldeduction,
+                   p.breakdown, p.paymentmethod, p.transactionid,
+                   p.accountnumber, p.bankname, p.accountholdername, p.ifsccode, p.upiid,
+                   u.name AS EmployeeName
+            FROM t_payslips p
+            INNER JOIN t_users u ON p.empid = u.empid
+            WHERE p.empid = @EmpId AND p.type = 'Payroll'
+            ORDER BY p.generatedat DESC
             LIMIT @Limit";
 
         try
         {
             return await _db.QueryAsync<Payslip>(sql, new { EmpId = empId, Limit = limit });
         }
-        catch
+        catch (Exception ex)
         {
-            // t_payslips may not have all columns yet — return empty list gracefully
+            Console.WriteLine($"[SalaryRepo.GetMyPayslipsAsync] Query failed: {ex.Message}");
             return System.Linq.Enumerable.Empty<Payslip>();
         }
     }
@@ -564,7 +734,8 @@ public class SalaryRepository : ISalaryRepository
     public async Task<IEnumerable<User>> GetCompanyUsersForPayrollAsync(int adminId)
     {
         var query = @"
-            SELECT u.empid, u.name, u.spaceid, u.email, u.status, u.role
+            SELECT u.empid, u.name, u.spaceid, u.email, u.status, u.role,
+                   u.accountnumber, u.bankname, u.accountholdername, u.ifsccode, u.upiid
             FROM t_users u
             INNER JOIN t_spaces s ON u.spaceid = s.spaceid
             WHERE s.adminid = @AdminId
@@ -576,10 +747,11 @@ public class SalaryRepository : ISalaryRepository
     {
         var query = @"
             SELECT COUNT(1) 
-            FROM t_payrollpayments 
+            FROM t_payslips 
             WHERE empid = @EmpId 
-              AND EXTRACT(MONTH FROM paidat) = @Month 
-              AND EXTRACT(YEAR FROM paidat) = @Year";
+              AND month = @Month 
+              AND year = @Year 
+              AND type = 'Payroll'";
         var count = await _db.ExecuteScalarAsync<int>(query, new { EmpId = empId, Month = month, Year = year });
         return count > 0;
     }
@@ -624,13 +796,18 @@ public class SalaryRepository : ISalaryRepository
         decimal totalAllowance, 
         string breakdown, 
         string paymentMethod, 
-        string transactionId)
+        string transactionId,
+        int month = 0,
+        int year = 0)
     {
+        if (month == 0) month = DateTime.UtcNow.Month;
+        if (year == 0) year = DateTime.UtcNow.Year;
+
         var query = @"
             INSERT INTO t_payslips 
-                (empid, spaceid, baseamount, deduction, finalamount, type, paymentid, generatedat, basic, totalallowance, totaldeduction, breakdown, paymentmethod, transactionid)
+                (empid, spaceid, baseamount, deduction, finalamount, type, paymentid, generatedat, month, year, basic, totalallowance, totaldeduction, breakdown, paymentmethod, transactionid)
             VALUES 
-                (@EmpId, @SpaceId, @BaseAmount, @Deduction, @FinalAmount, 'Payroll', @PaymentId, CURRENT_TIMESTAMP, @Basic, @TotalAllowance, @Deduction, @Breakdown, @PaymentMethod, @TransactionId);";
+                (@EmpId, @SpaceId, @BaseAmount, @Deduction, @FinalAmount, 'Payroll', @PaymentId, CURRENT_TIMESTAMP, @Month, @Year, @Basic, @TotalAllowance, @Deduction, @Breakdown, @PaymentMethod, @TransactionId);";
         
         await _db.ExecuteAsync(query, new
         {
@@ -640,6 +817,8 @@ public class SalaryRepository : ISalaryRepository
             Deduction = deduction,
             FinalAmount = finalAmount,
             PaymentId = paymentId,
+            Month = month,
+            Year = year,
             Basic = basic,
             TotalAllowance = totalAllowance,
             Breakdown = breakdown,

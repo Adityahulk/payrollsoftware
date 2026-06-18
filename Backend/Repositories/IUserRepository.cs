@@ -31,4 +31,5 @@ public interface IUserRepository
     Task<int> CreateOtpAsync(int empId, string otp, DateTime expiresAt);
     Task<dynamic?> GetActiveOtpAsync(int empId, string otp);
     Task<bool> MarkOtpAsUsedAsync(int otpId);
+    Task<bool> IsUserUnderAdminAsync(int targetEmpId, int adminEmpId);
 }

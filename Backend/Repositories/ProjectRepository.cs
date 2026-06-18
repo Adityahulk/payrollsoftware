@@ -20,7 +20,9 @@ public class ProjectRepository : IProjectRepository
     public async Task<IEnumerable<Project>> GetAllProjectsAsync()
     {
         var query = @"
-            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, links, documentationlinks, 
+            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, 
+                   array_to_json(links)::text AS LinksRaw, 
+                   array_to_json(documentationlinks)::text AS DocLinksRaw, 
                    startdate::timestamp AS startdate, enddate::timestamp AS enddate, teamid, createdat 
             FROM t_projects 
             ORDER BY projectid DESC";
@@ -30,7 +32,9 @@ public class ProjectRepository : IProjectRepository
     public async Task<IEnumerable<Project>> GetProjectsByCreator(int empId)
     {
         var sql = @"
-            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, links, documentationlinks, 
+            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, 
+                   array_to_json(links)::text AS LinksRaw, 
+                   array_to_json(documentationlinks)::text AS DocLinksRaw, 
                    startdate::timestamp AS startdate, enddate::timestamp AS enddate, teamid, createdat
             FROM t_projects
             WHERE createdbyid = @EmpId
@@ -42,7 +46,9 @@ public class ProjectRepository : IProjectRepository
     public async Task<IEnumerable<Project>> GetProjectsByAdminIdAsync(int adminId)
     {
         var sql = @"
-            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, links, documentationlinks, 
+            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, 
+                   array_to_json(links)::text AS LinksRaw, 
+                   array_to_json(documentationlinks)::text AS DocLinksRaw, 
                    startdate::timestamp AS startdate, enddate::timestamp AS enddate, teamid, createdat
             FROM t_projects
             WHERE adminid = @AdminId
@@ -53,7 +59,9 @@ public class ProjectRepository : IProjectRepository
     public async Task<IEnumerable<Project>> GetProjectsByEmpIdAsync(int empId)
     {
         var query = @"
-            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, links, documentationlinks, 
+            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, 
+                   array_to_json(links)::text AS LinksRaw, 
+                   array_to_json(documentationlinks)::text AS DocLinksRaw, 
                    startdate::timestamp AS startdate, enddate::timestamp AS enddate, teamid, createdat
             FROM t_projects
             WHERE adminid = COALESCE(
@@ -68,7 +76,9 @@ public class ProjectRepository : IProjectRepository
     public async Task<Project?> GetProjectByIdAsync(int projectId)
     {
         var query = @"
-            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, links, documentationlinks, 
+            SELECT projectid, createdbyid, adminid, spaceid, projectname, description, 
+                   array_to_json(links)::text AS LinksRaw, 
+                   array_to_json(documentationlinks)::text AS DocLinksRaw, 
                    startdate::timestamp AS startdate, enddate::timestamp AS enddate, teamid, createdat 
             FROM t_projects 
             WHERE projectid = @ProjectId";
@@ -79,7 +89,10 @@ public class ProjectRepository : IProjectRepository
     {
         var query = @"
             INSERT INTO t_projects (projectname, description, links, documentationlinks, startdate, enddate, teamid, createdbyid, adminid, spaceid, createdat) 
-            VALUES (@ProjectName, @Description, @Links, @DocumentationLinks, @StartDate, @EndDate, @TeamId, @CreatedById, @AdminId, @SpaceId, NOW()) 
+            VALUES (@ProjectName, @Description, 
+                    ARRAY(SELECT json_array_elements_text(COALESCE(NULLIF(@LinksRaw, ''), '[]')::json)), 
+                    ARRAY(SELECT json_array_elements_text(COALESCE(NULLIF(@DocLinksRaw, ''), '[]')::json)), 
+                    @StartDate, @EndDate, @TeamId, @CreatedById, @AdminId, @SpaceId, NOW()) 
             RETURNING projectid;";
         return await _dbConnection.ExecuteScalarAsync<int>(query, project);
     }
@@ -89,7 +102,8 @@ public class ProjectRepository : IProjectRepository
         var query = @"
             UPDATE t_projects 
             SET projectname = @ProjectName, description = @Description, 
-                links = @Links, documentationlinks = @DocumentationLinks, 
+                links = ARRAY(SELECT json_array_elements_text(COALESCE(NULLIF(@LinksRaw, ''), '[]')::json)), 
+                documentationlinks = ARRAY(SELECT json_array_elements_text(COALESCE(NULLIF(@DocLinksRaw, ''), '[]')::json)), 
                 startdate = @StartDate, enddate = @EndDate, teamid = @TeamId, spaceid = @SpaceId
             WHERE projectid = @ProjectId";
         var result = await _dbConnection.ExecuteAsync(query, project);
@@ -236,6 +250,31 @@ public class ProjectRepository : IProjectRepository
                 completedat = CASE WHEN @Status IN ('Completed', 'Complete', 'Resolve') THEN NOW() ELSE NULL END
             WHERE taskid = @TaskId";
         var result = await _dbConnection.ExecuteAsync(query, new { Status = status, TaskId = taskId });
+        return result > 0;
+    }
+
+    public async Task<IEnumerable<ProjectFile>> GetProjectFilesAsync(int projectId)
+    {
+        var sql = "SELECT fileid, projectid, filename, filepath, uploadedat FROM t_project_files WHERE projectid = @ProjectId ORDER BY uploadedat DESC;";
+        return await _dbConnection.QueryAsync<ProjectFile>(sql, new { ProjectId = projectId });
+    }
+
+    public async Task<int> AddProjectFileAsync(ProjectFile file)
+    {
+        var sql = "INSERT INTO t_project_files (projectid, filename, filepath, uploadedat) VALUES (@ProjectId, @FileName, @FilePath, NOW()) RETURNING fileid;";
+        return await _dbConnection.ExecuteScalarAsync<int>(sql, file);
+    }
+
+    public async Task<ProjectFile?> GetProjectFileByIdAsync(int fileId)
+    {
+        var sql = "SELECT fileid, projectid, filename, filepath, uploadedat FROM t_project_files WHERE fileid = @FileId;";
+        return await _dbConnection.QueryFirstOrDefaultAsync<ProjectFile>(sql, new { FileId = fileId });
+    }
+
+    public async Task<bool> DeleteProjectFileAsync(int fileId)
+    {
+        var sql = "DELETE FROM t_project_files WHERE fileid = @FileId;";
+        var result = await _dbConnection.ExecuteAsync(sql, new { FileId = fileId });
         return result > 0;
     }
 }

@@ -162,7 +162,7 @@ public class AuthController : ControllerBase
                 Role = safeUser.Role,
                 EmpId = safeUser.EmpId,
                 SpaceId = safeUser.SpaceId,
-                Name = safeUser.Email
+                Name = user.Name ?? user.Email
             });
         }
         catch (Exception ex)
@@ -199,6 +199,7 @@ public class AuthController : ControllerBase
             var newUser = new User
             {
                 Email        = request.Email,
+                Name         = request.Name ?? (request.Email.Contains("@") ? request.Email.Split('@')[0] : "New User"),
                 PasswordHash = hasher.HashPassword(null!, request.Password),
                 Role         = role,
                 SpaceId      = role == "Admin" ? null : request.SpaceId,
@@ -229,7 +230,7 @@ public class AuthController : ControllerBase
             }
 
             var token = GenerateJwtToken(newUser);
-            return Ok(new { Token = token, Role = newUser.Role, EmpId = empId, SpaceId = newUser.SpaceId, Name = newUser.Email, Status = newUser.Status });
+            return Ok(new { Token = token, Role = newUser.Role, EmpId = empId, SpaceId = newUser.SpaceId, Name = newUser.Name ?? newUser.Email, Status = newUser.Status });
         }
         catch (Exception ex)
         {

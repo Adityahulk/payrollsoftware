@@ -19,4 +19,7 @@ public interface IAttendanceRepository
     Task TestClearTodayAsync(int empId);
     Task<dynamic> GetTrendsAsync(int empId);
     Task<List<string>> GetWorkingDaysByEmpIdAsync(int empId);
+    Task<IEnumerable<Holiday>> GetHolidaysBySpaceIdAsync(int spaceId);
+    Task<bool> AddHolidayAsync(Holiday holiday);
+    Task<bool> DeleteHolidayAsync(int holidayId, int spaceId);
 }
