@@ -1229,32 +1229,3 @@ public class UtcDateTimeConverter : System.Text.Json.Serialization.JsonConverter
         }
     }
 }
-
-public class UtcDateTimeConverter : System.Text.Json.Serialization.JsonConverter<DateTime>
-{
-    public override DateTime Read(ref System.Text.Json.Utf8JsonReader reader, Type typeToConvert, System.Text.Json.JsonSerializerOptions options)
-    {
-        var str = reader.GetString();
-        if (string.IsNullOrEmpty(str)) return default;
-        return DateTime.Parse(str);
-    }
-
-    public override void Write(System.Text.Json.Utf8JsonWriter writer, DateTime value, System.Text.Json.JsonSerializerOptions options)
-    {
-        if (value.TimeOfDay == TimeSpan.Zero && (value.Kind == DateTimeKind.Unspecified || value.Kind == DateTimeKind.Local))
-        {
-            writer.WriteStringValue(value.ToString("yyyy-MM-dd"));
-        }
-        else
-        {
-            if (value.Kind == DateTimeKind.Utc)
-            {
-                writer.WriteStringValue(value.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"));
-            }
-            else
-            {
-                writer.WriteStringValue(value.ToString("yyyy-MM-ddTHH:mm:ss.fff"));
-            }
-        }
-    }
-}
