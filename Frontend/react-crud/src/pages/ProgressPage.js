@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import AppLayout from '../components/AppLayout';
 import { worklogsApi } from '../api/worklogs';
 import { payrollApi } from '../api/payroll';
+
 import { usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import toast from 'react-hot-toast';
@@ -20,13 +21,13 @@ function ProgressBar({ value, color = 'var(--primary-500)', height = 8 }) {
 
 function StatusBadge({ status }) {
   const map = {
-    'Completed':   { bg: '#D1FAE5', color: '#065F46' },
-    'Complete':    { bg: '#D1FAE5', color: '#065F46' },
-    'Resolve':     { bg: '#D1FAE5', color: '#065F46' },
-    'InProgress':  { bg: '#DBEAFE', color: '#1D4ED8' },
+    'Completed': { bg: '#D1FAE5', color: '#065F46' },
+    'Complete': { bg: '#D1FAE5', color: '#065F46' },
+    'Resolve': { bg: '#D1FAE5', color: '#065F46' },
+    'InProgress': { bg: '#DBEAFE', color: '#1D4ED8' },
     'In Progress': { bg: '#DBEAFE', color: '#1D4ED8' },
-    'Active':      { bg: '#DBEAFE', color: '#1D4ED8' },
-    'Pending':     { bg: '#FEF3C7', color: '#92400E' },
+    'Active': { bg: '#DBEAFE', color: '#1D4ED8' },
+    'Pending': { bg: '#FEF3C7', color: '#92400E' },
   };
   const style = map[status] || { bg: '#F3F4F6', color: '#374151' };
   return (
@@ -100,7 +101,7 @@ export default function ProgressPage({ isAdmin = false }) {
 
     progressPromise
       .then(r => setReport(r.data || null))
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setLoadingReport(false));
 
     return () => ac.abort();
@@ -116,11 +117,11 @@ export default function ProgressPage({ isAdmin = false }) {
       return;
     }
 
-    const empName = isAdmin 
+    const empName = isAdmin
       ? (employees.find(e => e.empId === Number(selectedEmpId))?.name || `Employee_${selectedEmpId}`)
       : (user?.name || 'Employee');
-    
-    const empRole = isAdmin 
+
+    const empRole = isAdmin
       ? (employees.find(e => e.empId === Number(selectedEmpId))?.role || '')
       : (user?.role || '');
 
@@ -233,7 +234,7 @@ export default function ProgressPage({ isAdmin = false }) {
       const pct = task.completionPercentage || task.completionpercentage || 0;
       const est = parseFloat(task.estimatedHours || task.estimatedhours || 0).toFixed(1);
       const actual = parseFloat(task.actualHours || task.actualhours || 0).toFixed(1);
-      
+
       let statusClass = 'task-pending';
       if (status === 'Completed' || status === 'Complete' || status === 'Resolve') statusClass = 'task-completed';
       else if (status === 'InProgress' || status === 'In Progress' || status === 'Active') statusClass = 'task-inprogress';
@@ -281,7 +282,7 @@ export default function ProgressPage({ isAdmin = false }) {
               {isAdmin ? "View and track work progress, task completion and attendance summary for team roster" : "Your work progress, task completion and attendance summary"}
             </p>
           </div>
-          
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             {isAdmin && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -306,7 +307,7 @@ export default function ProgressPage({ isAdmin = false }) {
                 </select>
               </div>
             )}
-            
+
             {report && (
               <button
                 className="btn btn-outline"

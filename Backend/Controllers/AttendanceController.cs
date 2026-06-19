@@ -247,4 +247,19 @@ public class AttendanceController : ControllerBase
         }
         return BadRequest(new { message = "Failed to add holiday." });
     }
+
+    [HttpDelete("holidays/{holidayId}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> DeleteHoliday(int holidayId)
+    {
+        var spaceId = GetSpaceId();
+        if (spaceId == 0) return BadRequest(new { message = "Invalid space context." });
+        
+        var result = await _attendanceService.DeleteHolidayAsync(holidayId, spaceId);
+        if (result)
+        {
+            return Ok(new { message = "Holiday deleted successfully." });
+        }
+        return BadRequest(new { message = "Failed to delete holiday." });
+    }
 }
