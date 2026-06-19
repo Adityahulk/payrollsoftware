@@ -33,19 +33,29 @@ builder.Services.AddCors(options =>
         policy =>
         {
             policy.WithOrigins(
-                "http://localhost:3000",
-                "http://localhost:3001",
-                "http://127.0.0.1:3001",
-                "http://127.0.0.1:3000",
                 "https://payrollmicrotechnique.store",
                 "https://www.payrollmicrotechnique.store",
                 "http://payrollmicrotechnique.store",
                 "http://www.payrollmicrotechnique.store",
+                "http://localhost:3000",
+                "http://localhost:3001",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:3001",
                 "http://64.227.173.208",
                 "http://64.227.173.208:3000",
                 "http://64.227.173.208:3001",
                 "http://64.227.173.208:5000",
-                "http://64.227.173.208:5001"
+                "http://64.227.173.208:5001",
+                "https://payrollsoftindia.duckdns.org",
+                "http://payrollsoftindia.duckdns.org",
+                "https://payrollsoftindia.duckdns.org:3000",
+                "http://payrollsoftindia.duckdns.org:3000",
+                "https://payrollsoftindia.duckdns.org:3001",
+                "http://payrollsoftindia.duckdns.org:3001",
+                "https://payrollsoftindia.duckdns.org:5000",
+                "http://payrollsoftindia.duckdns.org:5000",
+                "https://payrollsoftindia.duckdns.org:5001",
+                "http://payrollsoftindia.duckdns.org:5001"
             )
             .AllowAnyHeader()
             .AllowAnyMethod()
